@@ -53,7 +53,7 @@ function normalizeEventTime(payload) {
  * @returns {string} 'VMS' | 'APP' | 'UNKNOWN'
  */
 function detectSource(payload) {
-    if (!payload) return 'UNKNOWN';
+    if (!payload) return 'DEFAULT';
 
     // VMS indicators
     if (payload.EventName === 'ANPR' && payload.DeviceId) {
@@ -75,10 +75,11 @@ function detectSource(payload) {
     // If it has PlateNumber and DeviceIP it's likely VMS
     if (payload.PlateNumber && payload.DeviceIP) return 'VMS';
 
-    return 'APP';
+    return 'DEFAULT';
 }
 
 function extractViolations(p) {
+    if (!p) return [];
     const violationTypes = [];
     if (p.NoHelmet === 'True' || p.NoHelmet === true) violationTypes.push('NoHelmet');
     if (p.RedLightViolated === 'True' || p.RedLightViolated === true) violationTypes.push('RedLightViolated');
@@ -154,6 +155,7 @@ function normalizeAppAnpr(p) {
  * @returns {Object} Canonical Event
  */
 function normalizeEvent(topic, payload) {
+    payload = payload || {};
     const sourceType = detectSource(payload);
 
     // ANPR Normalization
@@ -226,5 +228,6 @@ function normalizeEvent(topic, payload) {
 module.exports = {
     normalizeEvent,
     detectSource,
-    normalizeEventTime
+    normalizeEventTime,
+    extractViolations
 };

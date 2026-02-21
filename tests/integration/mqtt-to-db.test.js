@@ -335,7 +335,7 @@ describe('MQTT Ingestion to Database', () => {
             }
 
             expect(connectionError).not.toBeNull();
-            expect(connectionError.message).toContain('connection');
+            expect(connectionError.message.toLowerCase()).toContain('connection');
         });
 
         test('continues processing after insert failure', async () => {

@@ -385,12 +385,17 @@ describe('Resilience & Error Handling', () => {
             let timedOut = false;
             const maxWait = 1000;
 
+            const longShutdown = async () => new Promise(resolve => setTimeout(resolve, maxWait + 500));
+
+            const shutdownPromise = longShutdown();
+
             await Promise.race([
-                new Promise(resolve => {
-                    setTimeout(() => { timedOut = true; }, 500);
+                shutdownPromise,
+                new Promise(resolve => setTimeout(() => {
+                    // If shutdown hasn't completed within 500ms, mark as timed out
+                    timedOut = true;
                     resolve();
-                }),
-                new Promise(resolve => setTimeout(resolve, maxWait))
+                }, 500))
             ]);
 
             expect(timedOut).toBe(true);

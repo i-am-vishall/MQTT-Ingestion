@@ -12,7 +12,9 @@
 // };
 
 // Mock timers globally if needed
-jest.useFakeTimers();
+// Note: Global fake timers interfere with tests relying on real timeouts.
+// Tests that require fake timers should enable them locally.
+// jest.useFakeTimers();
 
 // Global test utilities
 global.testUtils = {

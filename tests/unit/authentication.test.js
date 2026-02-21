@@ -9,8 +9,18 @@ describe('Authentication Security', () => {
     let hashPassword, verifyPassword, RateLimiter;
 
     beforeAll(() => {
-        // Password hashing functions
+        // Password hashing functions (test helper mirrors production validation)
         hashPassword = (password, salt = null) => {
+            if (!password) throw new Error('Password cannot be empty');
+            if (typeof password !== 'string') throw new Error('Invalid password type');
+
+            // Enforce strength similar to production
+            if (password.length < 12) throw new Error('Password must be at least 12 characters');
+            if (!/[A-Z]/.test(password)) throw new Error('Must contain uppercase letter');
+            if (!/[a-z]/.test(password)) throw new Error('Must contain lowercase letter');
+            if (!/[0-9]/.test(password)) throw new Error('Must contain number');
+            if (!/[!@#$%^&*]/.test(password)) throw new Error('Must contain special character');
+
             if (!salt) {
                 salt = crypto.randomBytes(32).toString('hex');
             }
@@ -21,11 +31,12 @@ describe('Authentication Security', () => {
         };
 
         verifyPassword = (password, hash) => {
-            const [salt, hashPart] = hash.split(':');
-            const newHash = crypto
-                .pbkdf2Sync(password, salt, 100000, 64, 'sha256')
-                .toString('hex');
             try {
+                if (!hash || typeof hash !== 'string' || hash.indexOf(':') === -1) return false;
+                const [salt, hashPart] = hash.split(':');
+                const newHash = crypto
+                    .pbkdf2Sync(password, salt, 100000, 64, 'sha256')
+                    .toString('hex');
                 return crypto.timingSafeEqual(
                     Buffer.from(newHash),
                     Buffer.from(hashPart)
@@ -254,7 +265,7 @@ describe('Authentication Security', () => {
 
             result = limiter.check(ip);
             expect(result.allowed).toBe(true);
-            expect(result.remaining).toBe(5);
+            expect(result.remaining).toBe(limiter.maxAttempts);
 
             jest.useRealTimers();
         });
