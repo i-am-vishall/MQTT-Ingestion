@@ -1,0 +1,809 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 10,
+      "title": "GLOBAL HEALTH",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "bfags8rjk1o1sc"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 1
+      },
+      "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "title": "TOTAL DEVICES",
+      "type": "stat",
+      "targets": [
+        {
+          "alias": "Total",
+          "query": "SELECT count(\"last\") FROM (SELECT last(\"percent_packet_loss\") FROM \"ping\" WHERE time > now() - 2m GROUP BY \"url\")",
+          "rawQuery": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "bfags8rjk1o1sc"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 1
+      },
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "title": "ONLINE",
+      "type": "stat",
+      "targets": [
+        {
+          "alias": "Online",
+          "query": "SELECT count(\"last\") FROM (SELECT last(\"percent_packet_loss\") FROM \"ping\" WHERE \"percent_packet_loss\" < 100 AND time > now() - 2m GROUP BY \"url\")",
+          "rawQuery": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "bfags8rjk1o1sc"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 1
+      },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "title": "OFFLINE",
+      "type": "stat",
+      "targets": [
+        {
+          "alias": "Offline",
+          "query": "SELECT count(\"last\") FROM (SELECT last(\"percent_packet_loss\") FROM \"ping\" WHERE \"percent_packet_loss\" = 100 AND time > now() - 2m GROUP BY \"url\")",
+          "rawQuery": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "bfags8rjk1o1sc"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 90
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 1
+      },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "title": "% AVAILABILITY",
+      "type": "stat",
+      "targets": [
+        {
+          "alias": "Availability",
+          "query": "SELECT mean(\"percent_packet_loss\") * -1 + 100 FROM \"ping\" WHERE $timeFilter",
+          "rawQuery": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "id": 100,
+      "title": "SERVER HEALTH",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "bfags8rjk1o1sc"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 6
+      },
+      "id": 200,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        }
+      },
+      "title": "SERVER ONLINE",
+      "type": "stat",
+      "targets": [
+        {
+          "alias": "Online",
+          "query": "SELECT count(\"last\") FROM (SELECT last(\"percent_packet_loss\") FROM \"ping\" WHERE \"percent_packet_loss\" < 100 AND \"role\" = 'server' AND time > now() - 2m GROUP BY \"url\")",
+          "rawQuery": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "bfags8rjk1o1sc"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 6
+      },
+      "id": 300,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          }
+        }
+      },
+      "title": "SERVER OFFLINE",
+      "type": "stat",
+      "targets": [
+        {
+          "alias": "Offline",
+          "query": "SELECT count(\"last\") FROM (SELECT last(\"percent_packet_loss\") FROM \"ping\" WHERE \"percent_packet_loss\" = 100 AND \"role\" = 'server' AND time > now() - 2m GROUP BY \"url\")",
+          "rawQuery": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "bfags8rjk1o1sc"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 6
+      },
+      "id": 400,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 90
+              }
+            ]
+          }
+        }
+      },
+      "title": "SERVER AVAILABILITY",
+      "type": "stat",
+      "targets": [
+        {
+          "alias": "Availability",
+          "query": "SELECT mean(\"percent_packet_loss\") * -1 + 100 FROM \"ping\" WHERE \"role\" = 'server' AND $timeFilter",
+          "rawQuery": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 10
+      },
+      "id": 101,
+      "title": "CAMERA HEALTH",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "bfags8rjk1o1sc"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 11
+      },
+      "id": 201,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        }
+      },
+      "title": "CAMERA ONLINE",
+      "type": "stat",
+      "targets": [
+        {
+          "alias": "Online",
+          "query": "SELECT count(\"last\") FROM (SELECT last(\"percent_packet_loss\") FROM \"ping\" WHERE \"percent_packet_loss\" < 100 AND \"role\" = 'camera' AND time > now() - 2m GROUP BY \"url\")",
+          "rawQuery": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "bfags8rjk1o1sc"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 11
+      },
+      "id": 301,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          }
+        }
+      },
+      "title": "CAMERA OFFLINE",
+      "type": "stat",
+      "targets": [
+        {
+          "alias": "Offline",
+          "query": "SELECT count(\"last\") FROM (SELECT last(\"percent_packet_loss\") FROM \"ping\" WHERE \"percent_packet_loss\" = 100 AND \"role\" = 'camera' AND time > now() - 2m GROUP BY \"url\")",
+          "rawQuery": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "bfags8rjk1o1sc"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 11
+      },
+      "id": 401,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 90
+              }
+            ]
+          }
+        }
+      },
+      "title": "CAMERA AVAILABILITY",
+      "type": "stat",
+      "targets": [
+        {
+          "alias": "Availability",
+          "query": "SELECT mean(\"percent_packet_loss\") * -1 + 100 FROM \"ping\" WHERE \"role\" = 'camera' AND $timeFilter",
+          "rawQuery": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "id": 102,
+      "title": "SWITCH HEALTH",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "bfags8rjk1o1sc"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 16
+      },
+      "id": 202,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        }
+      },
+      "title": "SWITCH ONLINE",
+      "type": "stat",
+      "targets": [
+        {
+          "alias": "Online",
+          "query": "SELECT count(\"last\") FROM (SELECT last(\"percent_packet_loss\") FROM \"ping\" WHERE \"percent_packet_loss\" < 100 AND \"role\" = 'switch' AND time > now() - 2m GROUP BY \"url\")",
+          "rawQuery": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "bfags8rjk1o1sc"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 8,
+        "y": 16
+      },
+      "id": 302,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          }
+        }
+      },
+      "title": "SWITCH OFFLINE",
+      "type": "stat",
+      "targets": [
+        {
+          "alias": "Offline",
+          "query": "SELECT count(\"last\") FROM (SELECT last(\"percent_packet_loss\") FROM \"ping\" WHERE \"percent_packet_loss\" = 100 AND \"role\" = 'switch' AND time > now() - 2m GROUP BY \"url\")",
+          "rawQuery": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "bfags8rjk1o1sc"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 16
+      },
+      "id": 402,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 90
+              }
+            ]
+          }
+        }
+      },
+      "title": "SWITCH AVAILABILITY",
+      "type": "stat",
+      "targets": [
+        {
+          "alias": "Availability",
+          "query": "SELECT mean(\"percent_packet_loss\") * -1 + 100 FROM \"ping\" WHERE \"role\" = 'switch' AND $timeFilter",
+          "rawQuery": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "id": 500,
+      "title": "TRENDS",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "bfags8rjk1o1sc"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "id": 6,
+      "title": "Offline Devices (Trend - Global)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "alias": "Offline Count",
+          "query": "SELECT count(\"percent_packet_loss\") FROM \"ping\" WHERE \"percent_packet_loss\" = 100 AND $timeFilter GROUP BY time($__interval) fill(0)",
+          "rawQuery": true,
+          "refId": "A",
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "id": 600,
+      "title": "DETAILS",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "bfags8rjk1o1sc"
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "id": 7,
+      "title": "Device Status Table",
+      "type": "table",
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "ONLINE",
+                  "color": "green"
+                },
+                "100": {
+                  "text": "OFFLINE",
+                  "color": "red"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "targets": [
+        {
+          "alias": "status",
+          "query": "SELECT last(\"percent_packet_loss\") as \"status\" FROM \"ping\" WHERE \"role\" =~ /^$device_type$/ AND $timeFilter GROUP BY \"url\", \"role\"",
+          "rawQuery": true,
+          "refId": "A",
+          "resultFormat": "table"
+        }
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": [
+    "monitoring",
+    "dynamic",
+    "influxql",
+    "explicit-roles"
+  ],
+  "templating": {
+    "list": [
+      {
+        "allValue": null,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "influxdb",
+          "uid": "bfags8rjk1o1sc"
+        },
+        "definition": "SHOW TAG VALUES WITH KEY = \"role\"",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Device Type (Table Filter)",
+        "multi": true,
+        "name": "device_type",
+        "options": [],
+        "query": "SHOW TAG VALUES WITH KEY = \"role\"",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-5m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Comprehensive Monitoring (Explicit Panels)",
+  "uid": "comprehensive-monitoring-final",
+  "version": 1,
+  "weekStart": ""
+}

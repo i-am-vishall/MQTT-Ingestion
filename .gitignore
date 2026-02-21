@@ -1,0 +1,22 @@
+# Production Builds
+dist/
+Unified_Setup/
+release/
+build/
+I2V_Smart_City_Release_v1.0.2/
+
+# Executables
+*.exe
+*.msi
+
+# Dependencies
+node_modules/
+
+# Logs & Data
+logs/
+*.log
+data/
+db/data/
+
+# Environment & Config
+.env

@@ -1,0 +1,32 @@
+<service>
+	<id>mqttingestionservice.exe</id>
+	<name>MQTT Ingestion Service</name>
+	<description>Ingests real-time MQTT alerts into PostgreSQL.</description>
+	<executable>C:\Program Files\nodejs\node.exe</executable>
+	<argument>--harmony</argument>
+	<argument>C:\Users\mevis\MQTT-Ingetsion\ingestion-service\node_modules\node-windows\lib\wrapper.js</argument>
+	<argument>--file</argument>
+	<argument>C:\Users\mevis\MQTT-Ingetsion\ingestion-service\src\index.js</argument>
+	<argument>--scriptoptions=</argument>
+	<argument>--log</argument>
+	<argument>MQTT Ingestion Service wrapper</argument>
+	<argument>--grow</argument>
+	<argument>0.25</argument>
+	<argument>--wait</argument>
+	<argument>1</argument>
+	<argument>--maxrestarts</argument>
+	<argument>3</argument>
+	<argument>--abortonerror</argument>
+	<argument>n</argument>
+	<argument>--stopparentfirst</argument>
+	<argument>undefined</argument>
+	<logmode>rotate</logmode>
+	<stoptimeout>30sec</stoptimeout>
+	<env name="HOME" value="C:\Users\mevis"/>
+	<serviceaccount>
+		<domain>VISHAL-I2V</domain>
+		<user>LocalSystem</user>
+		<password></password>
+	</serviceaccount>
+	<workingdirectory>C:\Users\mevis\MQTT-Ingetsion\ingestion-service</workingdirectory>
+</service>
