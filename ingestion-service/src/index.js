@@ -41,12 +41,49 @@ logger.info('===================================================');
 logger.info(`STEP 2/6: Initializing Database Connection Pool... (Target: ${config.db.database} @ ${config.db.host}:${config.db.port})`);
 const pool = new Pool(config.db);
 
+// FIX #1: BATCH QUEUE CLASS (Prevents race condition in concurrent flushing)
+// ============================================================
+class BatchQueue {
+    constructor(maxConcurrent = 1) {
+        this.queue = [];
+        this.running = 0;
+        this.maxConcurrent = maxConcurrent;
+    }
+
+    async enqueue(fn) {
+        return new Promise((resolve, reject) => {
+            this.queue.push({ fn, resolve, reject });
+            this._process();
+        });
+    }
+
+    async _process() {
+        if (this.running >= this.maxConcurrent || this.queue.length === 0) {
+            return;
+        }
+
+        this.running++;
+        const { fn, resolve, reject } = this.queue.shift();
+
+        try {
+            const result = await fn();
+            resolve(result);
+        } catch (error) {
+            reject(error);
+        } finally {
+            this.running--;
+            this._process();
+        }
+    }
+}
+
 // State
 let messageBuffer = [];
 let batchTimer = null;
 let totalIngested = 0;
 let classificationRules = []; // Cache for rules
 let payloadMappings = []; // Cache for mappings
+const batchQueue = new BatchQueue(1); // Ensures sequential flushing
 
 // Periodic Heartbeat / Status Log (Every 30 seconds)
 setInterval(() => {
@@ -227,6 +264,111 @@ function handleMessage(topic, message, sourceId, sourceIp) {
 }
 
 // Connect to multiple brokers
+// FIX #2: BROKER CONNECTION STATE TRACKING (Detects silent MQTT failures)
+// ============================================================
+class BrokerConnectionState {
+    constructor(brokerId, brokerUrl) {
+        this.brokerId = brokerId;
+        this.brokerUrl = brokerUrl;
+        this.status = 'DISCONNECTED'; // CONNECTED, DISCONNECTED, OFFLINE, ERROR
+        this.lastConnected = null;
+        this.lastDisconnected = null;
+        this.lastError = null;
+        this.lastErrorTime = null;
+        this.connectionAttempts = 0;
+        this.successfulConnections = 0;
+        this.messageCount = 0;
+        this.errorCount = 0;
+        this.lastHeartbeat = Date.now();
+    }
+
+    connect() {
+        this.status = 'CONNECTED';
+        this.connectionAttempts++;
+        this.successfulConnections++;
+        this.lastConnected = new Date().toISOString();
+        this.lastHeartbeat = Date.now();
+    }
+
+    disconnect() {
+        this.status = 'DISCONNECTED';
+        this.lastDisconnected = new Date().toISOString();
+    }
+
+    offline() {
+        this.status = 'OFFLINE';
+    }
+
+    error(err) {
+        this.status = 'ERROR';
+        this.lastError = err?.message || String(err);
+        this.lastErrorTime = new Date().toISOString();
+        this.errorCount++;
+    }
+
+    recordMessage() {
+        this.messageCount++;
+        this.lastHeartbeat = Date.now();
+    }
+
+    isHealthy() {
+        return this.status === 'CONNECTED' && 
+               (Date.now() - this.lastHeartbeat < 120000); // 2 minute heartbeat window
+    }
+
+    toJSON() {
+        return {
+            brokerId: this.brokerId,
+            brokerUrl: this.brokerUrl,
+            status: this.status,
+            lastConnected: this.lastConnected,
+            lastDisconnected: this.lastDisconnected,
+            lastError: this.lastError,
+            lastErrorTime: this.lastErrorTime,
+            connectionAttempts: this.connectionAttempts,
+            successfulConnections: this.successfulConnections,
+            messageCount: this.messageCount,
+            errorCount: this.errorCount,
+            isHealthy: this.isHealthy(),
+            lastHeartbeat: new Date(this.lastHeartbeat).toISOString()
+        };
+    }
+}
+
+// Track all broker connections
+const brokerStates = new Map();
+
+// Periodic Broker Health Check (Every 60 seconds)
+setInterval(() => {
+    const brokerStatuses = {};
+    let unhealthyCount = 0;
+    
+    for (const [id, state] of brokerStates.entries()) {
+        brokerStatuses[id] = {
+            status: state.status,
+            healthy: state.isHealthy(),
+            messages: state.messageCount,
+            errors: state.errorCount
+        };
+        if (!state.isHealthy()) unhealthyCount++;
+    }
+
+    if (brokerStates.size > 0) {
+        logger.info({
+            action: 'broker_health_check',
+            totalBrokers: brokerStates.size,
+            healthyBrokers: brokerStates.size - unhealthyCount,
+            unhealthyBrokers: unhealthyCount,
+            details: brokerStatuses
+        }, `Broker Health Check: ${brokerStates.size - unhealthyCount}/${brokerStates.size} healthy`);
+
+        // Alert if any broker is unhealthy
+        if (unhealthyCount > 0) {
+            logger.warn(brokerStatuses, `⚠️ ${unhealthyCount} broker(s) unhealthy!`);
+        }
+    }
+}, 60000);
+
 if (config.mqtt.brokerUrls && config.mqtt.brokerUrls.length > 0) {
     config.mqtt.brokerUrls.forEach((url, idx) => {
         let sourceIp = 'UNKNOWN_IP';
@@ -249,12 +391,18 @@ if (config.mqtt.brokerUrls && config.mqtt.brokerUrls.length > 0) {
             logger.warn({ err: e, url }, 'Failed to parse Broker URL');
         }
 
+        // FIX #2: Initialize broker state tracking
+        const brokerState = new BrokerConnectionState(sourceId, url);
+        brokerStates.set(sourceId, brokerState);
+
         logger.info(`STEP 4 / 6 [${sourceId}]: Connecting to ${url} (${sourceIp})...`);
         const client = mqtt.connect(url, {
             reconnectPeriod: config.mqtt.reconnectPeriod,
         });
 
+        // FIX #2: Enhanced event handlers with state tracking
         client.on('connect', () => {
+            brokerState.connect();
             logger.info(`STEP 4/6 [${sourceId}]: MQTT Connected!`);
             client.subscribe(config.mqtt.topics, (err) => {
                 if (!err) {
@@ -265,8 +413,29 @@ if (config.mqtt.brokerUrls && config.mqtt.brokerUrls.length > 0) {
             });
         });
 
-        client.on('message', (topic, message) => handleMessage(topic, message, sourceId, sourceIp));
-        client.on('error', (err) => logger.error(err, `[${sourceId}] Error:`));
+        client.on('disconnect', () => {
+            brokerState.disconnect();
+            logger.warn({ sourceId }, `[${sourceId}] Disconnected from broker`);
+        });
+
+        client.on('offline', () => {
+            brokerState.offline();
+            logger.warn({ sourceId }, `[${sourceId}] Broker offline`);
+        });
+
+        client.on('message', (topic, message) => {
+            brokerState.recordMessage();
+            handleMessage(topic, message, sourceId, sourceIp);
+        });
+
+        client.on('error', (err) => {
+            brokerState.error(err);
+            logger.error({ err, sourceId }, `[${sourceId}] Error: ${err.message}`);
+        });
+
+        client.on('reconnect', () => {
+            logger.info({ sourceId }, `[${sourceId}] Attempting to reconnect...`);
+        });
 
         clients.push(client);
     });
@@ -277,6 +446,7 @@ if (config.mqtt.brokerUrls && config.mqtt.brokerUrls.length > 0) {
 } else {
     logger.error('No MQTT Broker URLs configured!');
 }
+
 
 function addToBatch(event) {
     // 1. Cap Buffer Size (Prevent OOM)
@@ -300,83 +470,76 @@ function addToBatch(event) {
 let isFlushing = false;
 
 async function flushBatch() {
-    if (isFlushing) return;
-    isFlushing = true;
+    await batchQueue.enqueue(async () => {
+        try {
+            // Drain Loop: Keep processing until buffer is empty
+            while (messageBuffer.length > 0) {
 
-    try {
-        // Drain Loop: Keep processing until buffer is empty
-        while (messageBuffer.length > 0) {
-
-            // Clear Timer if active
-            if (batchTimer) {
-                clearTimeout(batchTimer);
-                batchTimer = null;
-            }
-
-            // Swap Buffer
-            const batch = messageBuffer;
-            messageBuffer = [];
-
-            const client = await pool.connect();
-            try {
-                await client.query('BEGIN');
-
-                // 1. Insert Raw Events
-                const queryText = `
-                    INSERT INTO mqtt_events(event_time, camera_id, event_type, severity, payload, source_id, source_ip, camera_name)
-                    VALUES($1, $2, $3, $4, $5, $6, $7, $8)
-                `;
-
-                for (const msg of batch) {
-                    // Raw Insert
-                    await client.query(queryText, [
-                        msg.event_time,
-                        msg.camera_id,
-                        msg.event_type,
-                        msg.severity,
-                        msg.payload,
-                        msg.normalized?.source_id || 'UNKNOWN_SOURCE',
-                        msg.normalized?.source_ip,
-                        msg.normalized?.camera_name || 'UNKNOWN'
-                    ]);
-
-                    // 2. Classify and Update Live State
-                    await processLiveState(client, msg);
-
-
-                    // 3. Process ANPR Facts
-                    const isAnpr = msg.normalized?.event_type === 'ANPR' || msg.event_type === 'ANPR';
-                    const isFrs = msg.normalized?.event_type === 'Face_Recognition' || msg.event_type === 'Face_Recognition';
-
-                    // 4. Process FRS Facts
-                    if (isFrs) {
-                        await processFrsFact(client, msg);
-                    } else if (isAnpr) {
-                        await processAnprFact(client, msg);
-                    }
+                // Clear Timer if active
+                if (batchTimer) {
+                    clearTimeout(batchTimer);
+                    batchTimer = null;
                 }
 
-                await client.query('COMMIT');
-                totalIngested += batch.length;
-                // NO SUCCESS LOG ON BATCH - PERFORMANCE
-                // logger.info({ count: batch.length, total: totalIngested }, `Inserted batch of ${batch.length}`);
+                // Swap Buffer
+                const batch = messageBuffer;
+                messageBuffer = [];
 
-            } catch (e) {
-                await client.query('ROLLBACK');
-                logger.error(e, 'Failed to insert batch to DB');
-            } finally {
-                client.release();
+                const client = await pool.connect();
+                try {
+                    await client.query('BEGIN');
+
+                    // 1. Insert Raw Events
+                    const queryText = `
+                        INSERT INTO mqtt_events(event_time, camera_id, event_type, severity, payload, source_id, source_ip, camera_name)
+                        VALUES($1, $2, $3, $4, $5, $6, $7, $8)
+                    `;
+
+                    for (const msg of batch) {
+                        // Raw Insert
+                        await client.query(queryText, [
+                            msg.event_time,
+                            msg.camera_id,
+                            msg.event_type,
+                            msg.severity,
+                            msg.payload,
+                            msg.normalized?.source_id || 'UNKNOWN_SOURCE',
+                            msg.normalized?.source_ip,
+                            msg.normalized?.camera_name || 'UNKNOWN'
+                        ]);
+
+                        // 2. Classify and Update Live State
+                        await processLiveState(client, msg);
+
+
+                        // 3. Process ANPR Facts
+                        const isAnpr = msg.normalized?.event_type === 'ANPR' || msg.event_type === 'ANPR';
+                        const isFrs = msg.normalized?.event_type === 'Face_Recognition' || msg.event_type === 'Face_Recognition';
+
+                        // 4. Process FRS Facts
+                        if (isFrs) {
+                            await processFrsFact(client, msg);
+                        } else if (isAnpr) {
+                            await processAnprFact(client, msg);
+                        }
+                    }
+
+                    await client.query('COMMIT');
+                    totalIngested += batch.length;
+                    // NO SUCCESS LOG ON BATCH - PERFORMANCE
+                    // logger.info({ count: batch.length, total: totalIngested }, `Inserted batch of ${batch.length}`);
+
+                } catch (e) {
+                    await client.query('ROLLBACK');
+                    logger.error(e, 'Failed to insert batch to DB');
+                } finally {
+                    client.release();
+                }
             }
+        } catch (outerErr) {
+            logger.error(outerErr, 'Critical Error in flush loop');
         }
-    } catch (outerErr) {
-        logger.error(outerErr, 'Critical Error in flush loop');
-    } finally {
-        isFlushing = false;
-        // Safety check
-        if (messageBuffer.length >= config.service.batchSize) {
-            setTimeout(flushBatch, 0);
-        }
-    }
+    });
 }
 
 async function processLiveState(dbClient, msg) {
@@ -801,7 +964,34 @@ const healthServer = http.createServer((req, res) => {
         };
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(status));
-    } else {
+    }
+    // FIX #2: Add broker health endpoints
+    else if (req.url === '/health/brokers') {
+        const brokerHealth = {};
+        for (const [id, state] of brokerStates.entries()) {
+            brokerHealth[id] = state.toJSON();
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            status: 'UP',
+            brokers: brokerHealth,
+            totalBrokers: brokerStates.size,
+            healthyBrokers: Array.from(brokerStates.values()).filter(s => s.isHealthy()).length,
+            timestamp: new Date().toISOString()
+        }));
+    }
+    else if (req.url.startsWith('/health/brokers/')) {
+        const brokerId = req.url.substring('/health/brokers/'.length);
+        const state = brokerStates.get(brokerId);
+        if (state) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(state.toJSON()));
+        } else {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Broker not found' }));
+        }
+    }
+    else {
         res.writeHead(404);
         res.end();
     }
@@ -809,6 +999,7 @@ const healthServer = http.createServer((req, res) => {
 
 healthServer.listen(HEALTH_PORT, '127.0.0.1', () => {
     logger.info(`Health Monitor listening on http://127.0.0.1:${HEALTH_PORT}/health`);
+    logger.info(`Broker Health Monitor: http://127.0.0.1:${HEALTH_PORT}/health/brokers`);
 });
 
 logger.info('Starting Normal Service Flow...');

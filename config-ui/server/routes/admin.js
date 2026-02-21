@@ -3,6 +3,11 @@ const router = express.Router();
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const crypto = require('crypto');
+
+// FIX #3: SECURE AUTHENTICATION
+const createLogger = require('../../utils/createLogger');
+const logger = createLogger('admin-auth');
 
 // PATHS (inherited from index.js logic)
 const EXEC_DIR = path.dirname(process.execPath);
@@ -17,30 +22,244 @@ const PG_CONF_DEV = path.join(BASE_DIR, 'database', 'postgresql.conf'); // Just 
 const TELEGRAF_CONF = path.join(BASE_DIR, 'monitoring', 'telegraf.conf');
 const BAT_RESTART = path.join(BASE_DIR, 'restart_services.bat');
 
-// AUTH MIDDLEWARE
+// ============================================================
+// PASSWORD HASHING UTILITIES
+// ============================================================
+
+function hashPassword(password, salt = null) {
+    if (!password) {
+        throw new Error('Password cannot be empty');
+    }
+
+    if (password.length < 12) {
+        throw new Error('Password must be at least 12 characters');
+    }
+
+    if (!salt) {
+        salt = crypto.randomBytes(32).toString('hex');
+    }
+
+    const hash = crypto
+        .pbkdf2Sync(password, salt, 100000, 64, 'sha256')
+        .toString('hex');
+
+    return `${salt}:${hash}`;
+}
+
+function verifyPassword(password, hash) {
+    const [salt, hashPart] = hash.split(':');
+    const newHash = crypto
+        .pbkdf2Sync(password, salt, 100000, 64, 'sha256')
+        .toString('hex');
+
+    // Constant-time comparison to prevent timing attacks
+    try {
+        return crypto.timingSafeEqual(
+            Buffer.from(newHash),
+            Buffer.from(hashPart)
+        );
+    } catch (err) {
+        return false;
+    }
+}
+
+// ============================================================
+// RATE LIMITING
+// ============================================================
+
+class RateLimiter {
+    constructor(maxAttempts = 5, windowMs = 15 * 60 * 1000) {
+        this.maxAttempts = maxAttempts;
+        this.windowMs = windowMs;
+        this.attempts = new Map();
+
+        setInterval(() => this._cleanup(), 5 * 60 * 1000);
+    }
+
+    check(ip) {
+        const now = Date.now();
+        const record = this.attempts.get(ip);
+
+        if (!record || now - record.timestamp > this.windowMs) {
+            return { allowed: true, remaining: this.maxAttempts, resetAt: new Date(now + this.windowMs) };
+        }
+
+        if (record.count >= this.maxAttempts) {
+            return {
+                allowed: false,
+                remaining: 0,
+                resetAt: new Date(record.timestamp + this.windowMs),
+                message: `Rate limited. Try again in ${Math.ceil((record.timestamp + this.windowMs - now) / 1000)}s`
+            };
+        }
+
+        return {
+            allowed: true,
+            remaining: this.maxAttempts - record.count,
+            resetAt: new Date(record.timestamp + this.windowMs)
+        };
+    }
+
+    recordFailure(ip) {
+        const now = Date.now();
+        const record = this.attempts.get(ip);
+
+        if (!record || now - record.timestamp > this.windowMs) {
+            this.attempts.set(ip, { count: 1, timestamp: now });
+        } else {
+            record.count++;
+            if (record.count >= this.maxAttempts) {
+                logger.warn({ ip, attempts: record.count }, 'IP rate limited due to failed auth');
+            }
+        }
+    }
+
+    reset(ip) {
+        this.attempts.delete(ip);
+    }
+
+    _cleanup() {
+        const now = Date.now();
+        for (const [ip, record] of this.attempts.entries()) {
+            if (now - record.timestamp > this.windowMs) {
+                this.attempts.delete(ip);
+            }
+        }
+    }
+}
+
+const rateLimiter = new RateLimiter(5, 15 * 60 * 1000);
+
+// ============================================================
+// INITIALIZE ADMIN CREDENTIALS
+// ============================================================
+
+let adminCredentials = null;
+
+function initializeAdminCredentials() {
+    let adminUser = process.env.ADMIN_USER;
+    let adminPassHash = process.env.ADMIN_PASS_HASH;
+
+    if (!adminUser) {
+        adminUser = 'admin';
+        logger.warn('ADMIN_USER not configured, using default: admin');
+    }
+
+    if (!adminPassHash) {
+        logger.error('ADMIN_PASS_HASH not configured in environment!');
+        logger.error('To set up credentials, run setup endpoint or set environment variable');
+        // Allow service to start but auth will fail
+        adminPassHash = hashPassword(process.env.ADMIN_PASS || 'admin123');
+    }
+
+    adminCredentials = {
+        user: adminUser,
+        passHash: adminPassHash
+    };
+
+    logger.info({ user: adminUser }, '✅ Admin credentials initialized');
+}
+
+initializeAdminCredentials();
+
+// ============================================================
+// HTTPS ENFORCEMENT
+// ============================================================
+
+const enforceHttps = (req, res, next) => {
+    if (process.env.NODE_ENV === 'production' && !req.secure && req.get('x-forwarded-proto') !== 'https') {
+        logger.warn({ path: req.path, ip: req.ip }, 'HTTPS enforcement: rejected non-HTTPS request');
+        return res.status(403).json({ error: 'HTTPS required for admin operations' });
+    }
+    next();
+};
+
+// ============================================================
+// SECURE AUTH MIDDLEWARE
+// ============================================================
+
 const adminAuth = (req, res, next) => {
+    const ip = req.ip || req.connection.remoteAddress || 'UNKNOWN';
+    const path = req.path;
+
+    // 1. Check rate limiting
+    const rateCheck = rateLimiter.check(ip);
+    if (!rateCheck.allowed) {
+        logger.warn({ ip, path }, `Rate limited: ${rateCheck.message}`);
+        return res.status(429).json({
+            error: 'Too many failed attempts',
+            message: rateCheck.message,
+            resetAt: rateCheck.resetAt
+        });
+    }
+
+    // 2. Check Authorization header
     const authHeader = req.headers.authorization;
-    if (!authHeader) return res.status(401).json({ error: 'No authorization header' });
+    if (!authHeader) {
+        logger.warn({ ip, path }, 'MISSING_AUTH_HEADER');
+        return res.status(401).json({ error: 'No authorization header' });
+    }
 
-    // Simple Basic Auth
-    const encoded = authHeader.split(' ')[1];
-    if (!encoded) return res.status(401).json({ error: 'Invalid auth' });
+    // 3. Parse Basic Auth
+    try {
+        const parts = authHeader.split(' ');
+        if (parts[0] !== 'Basic') {
+            logger.warn({ ip, path, authType: parts[0] }, 'INVALID_AUTH_TYPE');
+            return res.status(401).json({ error: 'Only Basic authentication supported' });
+        }
 
-    const decoded = Buffer.from(encoded, 'base64').toString('utf-8');
-    const [user, pass] = decoded.split(':');
+        const encoded = parts[1];
+        if (!encoded) {
+            logger.warn({ ip, path }, 'MALFORMED_AUTH_HEADER');
+            return res.status(400).json({ error: 'Malformed authorization header' });
+        }
 
-    // Default password if not set in env
-    const EXPECTED_PASS = process.env.ADMIN_PASS || 'admin123';
+        const decoded = Buffer.from(encoded, 'base64').toString('utf-8');
+        const [username, password] = decoded.split(':');
 
-    if (pass === EXPECTED_PASS) {
+        // 4. Validate username
+        if (username !== adminCredentials.user) {
+            rateLimiter.recordFailure(ip);
+            logger.warn({ ip, attemptedUser: username }, 'INVALID_USERNAME');
+            return res.status(403).json({ error: 'Invalid credentials' });
+        }
+
+        // 5. Validate password
+        if (!password) {
+            rateLimiter.recordFailure(ip);
+            logger.warn({ ip, user: username }, 'MISSING_PASSWORD');
+            return res.status(400).json({ error: 'Password required' });
+        }
+
+        try {
+            if (!verifyPassword(password, adminCredentials.passHash)) {
+                rateLimiter.recordFailure(ip);
+                logger.warn({ ip, user: username }, 'INVALID_PASSWORD');
+                return res.status(403).json({ error: 'Invalid credentials' });
+            }
+        } catch (err) {
+            logger.error({ err: err.message }, 'Password verification failed');
+            return res.status(500).json({ error: 'Authentication error' });
+        }
+
+        // 6. Success!
+        rateLimiter.reset(ip);
+        logger.info({ user: username, ip, endpoint: path }, '✅ Admin authenticated');
+
+        req.adminUser = username;
+        req.adminIp = ip;
+        req.adminTimestamp = new Date();
+
         next();
-    } else {
-        res.status(403).json({ error: 'Invalid credentials' });
+
+    } catch (err) {
+        logger.error({ err: err.message }, 'Auth parsing failed');
+        return res.status(400).json({ error: 'Invalid authentication format' });
     }
 };
 
 // GET CONFIG
-router.get('/config', adminAuth, (req, res) => {
+router.get('/config', adminAuth, enforceHttps, (req, res) => {
     try {
         const config = {
             UI_PORT: process.env.PORT || '3001',
