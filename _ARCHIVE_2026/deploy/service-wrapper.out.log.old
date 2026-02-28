@@ -1,6 +1,0 @@
-DEBUG: Index 0, URL: mqtt://103.205.115.74:1883
-DEBUG: Configured IDs: ["VMS_103_205_115_74","ANPR_103_205_114_241"]
-DEBUG: Source Prefix: Source_Server
-DEBUG: Index 1, URL: mqtt://103.205.114.241:1883
-DEBUG: Configured IDs: ["VMS_103_205_115_74","ANPR_103_205_114_241"]
-DEBUG: Source Prefix: Source_Server

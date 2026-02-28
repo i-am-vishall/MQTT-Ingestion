@@ -1,7 +1,0 @@
-# pgRouting Extension
-comment = 'pgRouting Extension'
-default_version = '3.1.1'
-module_pathname = '$libdir/libpgrouting-3.1'
-relocatable = true
-requires = 'plpgsql'
-requires = 'postgis'

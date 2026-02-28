@@ -1,5 +1,0 @@
-pgRouting http://pgrouting.org : 3.1.1.0 8979a84ca76cb0abf25045a5009750ad58bc5cc4
-PostgreSQL http://www.postgresql.org : 11 64 gcc81
-CGAL http://www.cgal.org : 3.9
-BOOST http://www.boost.org : 1.46.1
-Built: 20201122

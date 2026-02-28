@@ -1,1 +1,0 @@
-These are currently not built with liblas or ght support.
