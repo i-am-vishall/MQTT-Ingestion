@@ -106,18 +106,17 @@ Copy-Item -Path "$SetupDir\db\*" -Destination $DbDest -Recurse -Force -Exclude "
 $PgsqlSrc = Join-Path "$SetupDir\db" "pgsql"
 $PgsqlDest = Join-Path $DbDest "pgsql"
 if (Test-Path $PgsqlSrc) {
-    Log "     -> Copying PostgreSQL Binaries (Lightweight)..."
-    # Using robocopy to exclude heavy folders
+    Log "     -> Copying PostgreSQL Binaries (Complete)..."
+    # Bundling everything except data/debug_symbols (to keep it clean but functional)
     $RoboSrc = $PgsqlSrc
     $RoboDest = $PgsqlDest
-    robocopy $RoboSrc $RoboDest /E /MT:32 /NFL /NDL /XD "data" "debug_symbols" "doc" "include" "pgAdmin III" "StackBuilder" | Out-Null
+    robocopy $RoboSrc $RoboDest /E /MT:32 /NFL /NDL /XD "data" "debug_symbols" "doc" "include" | Out-Null
 }
 
 Log "  -> Copying Monitoring Configs (Clean)..."
 $MonDest = Join-Path $ReleaseDir "monitoring"
 New-Item -Path $MonDest -ItemType Directory -Force | Out-Null
-# Update: Grafana is pre-installed. Only copy InfluxDB configs if they exist.
-# We skip the heavy grafana binaries.
+# We skip grafana (already installed) and heavy logs.
 robocopy "$SetupDir\monitoring" $MonDest /E /MT:32 /NFL /NDL /XD "data" "wal" "grafana" "influx_service.log" "influx_service.err" "telegraf_debug.log" | Out-Null
 
 Log "  -> Copying Utilities (NSSM)..."

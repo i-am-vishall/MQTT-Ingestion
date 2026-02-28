@@ -6,7 +6,7 @@ const { spawn } = require('child_process');
 const crypto = require('crypto');
 
 // FIX #3: SECURE AUTHENTICATION
-const createLogger = require('../../utils/createLogger');
+const createLogger = require('../utils/createLogger');
 const logger = createLogger('admin-auth');
 
 // PATHS (inherited from index.js logic)
@@ -149,7 +149,7 @@ function initializeAdminCredentials() {
         logger.error('ADMIN_PASS_HASH not configured in environment!');
         logger.error('To set up credentials, run setup endpoint or set environment variable');
         // Allow service to start but auth will fail
-        adminPassHash = hashPassword(process.env.ADMIN_PASS || 'admin123');
+        adminPassHash = hashPassword(process.env.ADMIN_PASS || 'admin123456789');
     }
 
     adminCredentials = {

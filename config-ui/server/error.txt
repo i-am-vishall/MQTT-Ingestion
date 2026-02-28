@@ -1,0 +1,30 @@
+DEBUG: I AM RUNNING FROM config-ui/server/index.js IN USER WORKSPACE
+[Startup] Loading .env from: C:\Users\mevis\MQTT-Ingetsion\.env
+[dotenv@17.2.3] injecting env (14) from ..\..\.env -- tip: ⚙️  write to custom object with { processEnv: myObject }
+info: [object Object] {"service":"config","timestamp":"2026-02-28T11:19:25.333Z"}
+UNCAUGHT EXCEPTION: Error: Cannot find module '../../utils/createLogger'
+Require stack:
+- C:\Users\mevis\MQTT-Ingetsion\config-ui\server\routes\admin.js
+- C:\Users\mevis\MQTT-Ingetsion\config-ui\server\index.js
+    at Function._resolveFilename (node:internal/modules/cjs/loader:1383:15)
+    at defaultResolveImpl (node:internal/modules/cjs/loader:1025:19)
+    at resolveForCJSWithHooks (node:internal/modules/cjs/loader:1030:22)
+    at Function._load (node:internal/modules/cjs/loader:1192:37)
+    at TracingChannel.traceSync (node:diagnostics_channel:322:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)
+    at Module.require (node:internal/modules/cjs/loader:1463:12)
+    at require (node:internal/modules/helpers:147:16)
+    at Object.<anonymous> (C:\Users\mevis\MQTT-Ingetsion\config-ui\server\routes\admin.js:9:22)
+    at Module._compile (node:internal/modules/cjs/loader:1706:14) {
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [
+    'C:\\Users\\mevis\\MQTT-Ingetsion\\config-ui\\server\\routes\\admin.js',
+    'C:\\Users\\mevis\\MQTT-Ingetsion\\config-ui\\server\\index.js'
+  ]
+}
+UNCAUGHT EXCEPTION: [Error: EPERM: operation not permitted, open 'C:\ProgramData\I2V\Logs\config\config-2026-02-28.log'] {
+  errno: -4048,
+  code: 'EPERM',
+  syscall: 'open',
+  path: 'C:\\ProgramData\\I2V\\Logs\\config\\config-2026-02-28.log'
+}

@@ -7,6 +7,7 @@ I2V_Smart_City_Release_v1.0.2/
 
 # Executables
 *.exe
+!I2V-Dashboard-Installer.exe
 *.msi
 
 # Dependencies

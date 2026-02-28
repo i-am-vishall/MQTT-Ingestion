@@ -1,0 +1,30 @@
+DEBUG: I AM RUNNING FROM config-ui/server/index.js IN USER WORKSPACE
+[Startup] Loading .env from: C:\Users\mevis\MQTT-Ingetsion\.env
+[dotenv@17.2.3] injecting env (14) from ..\..\.env -- tip: ⚙️  specify custom .env file path with { path: '/custom/path/.env' }
+info: [object Object] {"service":"config","timestamp":"2026-02-28T11:40:01.404Z"}
+warn: ADMIN_USER not configured, using default: admin {"service":"admin-auth","timestamp":"2026-02-28T11:40:01.410Z"}
+error: ADMIN_PASS_HASH not configured in environment! {"service":"admin-auth","timestamp":"2026-02-28T11:40:01.411Z"}
+error: To set up credentials, run setup endpoint or set environment variable {"service":"admin-auth","timestamp":"2026-02-28T11:40:01.411Z"}
+UNCAUGHT EXCEPTION: Error: Password must be at least 12 characters
+    at hashPassword (C:\Users\mevis\MQTT-Ingetsion\config-ui\server\routes\admin.js:35:15)
+    at initializeAdminCredentials (C:\Users\mevis\MQTT-Ingetsion\config-ui\server\routes\admin.js:152:25)
+    at Object.<anonymous> (C:\Users\mevis\MQTT-Ingetsion\config-ui\server\routes\admin.js:163:1)
+    at Module._compile (node:internal/modules/cjs/loader:1706:14)
+    at Object..js (node:internal/modules/cjs/loader:1839:10)
+    at Module.load (node:internal/modules/cjs/loader:1441:32)
+    at Function._load (node:internal/modules/cjs/loader:1263:12)
+    at TracingChannel.traceSync (node:diagnostics_channel:322:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)
+    at Module.require (node:internal/modules/cjs/loader:1463:12)
+UNCAUGHT EXCEPTION: [Error: EPERM: operation not permitted, open 'C:\ProgramData\I2V\Logs\config\config-2026-02-28.log'] {
+  errno: -4048,
+  code: 'EPERM',
+  syscall: 'open',
+  path: 'C:\\ProgramData\\I2V\\Logs\\config\\config-2026-02-28.log'
+}
+UNCAUGHT EXCEPTION: [Error: EPERM: operation not permitted, open 'C:\ProgramData\I2V\Logs\admin-auth\admin-auth-2026-02-28.log'] {
+  errno: -4048,
+  code: 'EPERM',
+  syscall: 'open',
+  path: 'C:\\ProgramData\\I2V\\Logs\\admin-auth\\admin-auth-2026-02-28.log'
+}
