@@ -35,6 +35,9 @@ Name: "{group}\I2V Config UI"; Filename: "http://localhost:3001"; IconFilename: 
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{group}\Update Services"; Filename: "{app}\update_services.bat"
 Name: "{group}\Fix Permissions"; Filename: "{app}\fix_permissions.bat"
+Name: "{group}\Test Database Connection"; Filename: "{app}\Verify_DB.bat"
+Name: "{group}\Run Auto Partition"; Filename: "{app}\Run_Auto_Partition.bat"
+Name: "{group}\Setup and Verify DB"; Filename: "{app}\Setup_and_Verify_DB.bat"
 
 [Run]
 ; Run VC++ redistributable install silently

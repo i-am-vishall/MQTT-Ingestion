@@ -141,8 +141,19 @@ if (Test-Path $CleanupScript) {
     Copy-Item -Path $CleanupScript -Destination "$ReleaseDir\cleanup.bat"
 }
 
-Copy-Item -Path "$SetupDir\uninstall.bat" -Destination "$ReleaseDir\uninstall.bat"
-Copy-Item -Path "$SetupDir\check_prerequisites.ps1" -Destination "$ReleaseDir\check_prerequisites.ps1"
+Copy-Item -Path "$SetupDir\uninstall.bat" -Destination "$ReleaseDir\uninstall.bat" -Force
+if (Test-Path "$SetupDir\check_prerequisites.ps1") {
+    Copy-Item -Path "$SetupDir\check_prerequisites.ps1" -Destination "$ReleaseDir\check_prerequisites.ps1" -Force
+}
+
+Log "  -> Bundling Custom Utility Scripts..."
+$UtilsToBundle = @("Run_Auto_Partition.bat", "Verify_DB.bat", "Setup_and_Verify_DB.bat", "Rename_DB_to_Grafana.bat")
+foreach ($Util in $UtilsToBundle) {
+    $UtilSrc = Join-Path "C:\Users\mevis\MQTT-Ingetsion" $Util
+    if (Test-Path $UtilSrc) {
+        Copy-Item -Path $UtilSrc -Destination "$ReleaseDir\$Util" -Force
+    }
+}
 
 # 5. GENERATE PRODUCTION ENV TEMPLATES
 # --------------------------------------------------------------------------
