@@ -1,23 +1,88 @@
-# Production Builds
+# ── Build Outputs & Dist ─────────────────────────────────────────────────────
 dist/
-Unified_Setup/
-release/
+dist_package/
 build/
+release/
+Unified_Setup/
 I2V_Smart_City_Release_v1.0.2/
+*.zip
+*.iss.bak
 
-# Executables
+# ── Executables & Installers ─────────────────────────────────────────────────
 *.exe
-!I2V-Dashboard-Installer.exe
 *.msi
 
-# Dependencies
+# ── Dependencies ─────────────────────────────────────────────────────────────
 node_modules/
+**/node_modules/
+venv/
+**/venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
 
-# Logs & Data
+# ── Logs & Runtime Data ──────────────────────────────────────────────────────
 logs/
 *.log
 data/
 db/data/
+dump.rdb
+*.rdb
+crash_log.txt
+*.txt
+!dev/README.md
+!puri_rath_yatra/backend/views_needed.txt
 
-# Environment & Config
+# ── Environment & Secrets ────────────────────────────────────────────────────
 .env
+.env.local
+.env.production
+
+# ── Debug / Scratch / One-off scripts ────────────────────────────────────────
+ingestion-service/check_*.js
+ingestion-service/verify_*.js
+ingestion-service/drop_*.js
+ingestion-service/run_*.js
+ingestion-service/db_results*.txt
+ingestion-service/errors_out*.txt
+ingestion-service/scratch/
+ingestion-service/scripts/debug_*.js
+ingestion-service/scripts/read_*.js
+ingestion-service/scripts/test_*.js
+ingestion-service/scripts/simulate_*.js
+ingestion-service/scripts/ruthless_*.js
+ingestion-service/scripts/fix_db.js
+ingestion-service/scripts/drain.js
+ingestion-service/scripts/worker_monitor.js
+ingestion-service/scripts/migrate_zones.js
+ingestion-service/scripts/delete_goa_schema.js
+ingestion-service/scripts/run_crowd_sql.js
+
+# ── Crowd Prediction Engines (Haridwar & Puri) ────────────────────────────────
+crowd-prediction-engine/
+hwd-crowd-prediction-engine/
+puri_rath_yatra/
+
+# ── Generated / Tool Output ──────────────────────────────────────────────────
+graphify-out/
+.agent/
+.graphifyignore
+coverage/
+jest.config.js
+
+# ── Redis Binary ─────────────────────────────────────────────────────────────
+redis/*.exe
+redis/*.pdb
+redis/*.conf
+redis/dump.rdb
+
+# ── Monitoring Binaries ───────────────────────────────────────────────────────
+monitoring/*.exe
+
+# ── OS & Editor ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+*.swp

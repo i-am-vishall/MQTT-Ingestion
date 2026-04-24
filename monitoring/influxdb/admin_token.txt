@@ -1,4 +1,0 @@
-{
-  "token": "apiv3_pPignodoymU5KNfoig3neUB3xyinBBoWRysCbaq32OqNMxLZikuyLB5C1_O1U3XoGt9CZVL7b0DTVOmcgMbcuQ",
-  "name": "_admin"
-}

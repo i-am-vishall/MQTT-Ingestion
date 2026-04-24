@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Outlet, useNavigate, NavLink, useLocation } from 'react-router-dom';
-import { Lock, Unlock, Network, Database, MonitorCheck, Gavel, LogOut, X, Shield } from 'lucide-react';
+import { Lock, Unlock, Network, Database, MonitorCheck, Gavel, LogOut, X, Shield, MapPin } from 'lucide-react';
 import axios from 'axios';
 
 const API_BASE = '/api';
@@ -143,6 +143,7 @@ const AdminLayout = () => {
                 <div className="flex overflow-x-auto">
                     <NavTab to="/admin/sources" icon={Network} label="Data Sources" />
                     <NavTab to="/admin/devices" icon={MonitorCheck} label="Device Monitoring" />
+                    <NavTab to="/admin/cameras" icon={MapPin} label="Camera Geodata" />
                     <NavTab to="/admin/schema" icon={Database} label="Schema Mapping" />
                     <NavTab to="/admin/config" icon={Gavel} label="System Config" />
                 </div>

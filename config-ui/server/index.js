@@ -11,6 +11,18 @@ const startLogWebSocket = require("./ws/logSocket");
 const ENV_PATH = path.join(__dirname, '..', '..', '.env');
 console.log('[Startup] Loading .env from:', ENV_PATH);
 require('dotenv').config({ path: ENV_PATH });
+const { Pool } = require('pg');
+
+const dbPool = new Pool({
+    user: process.env.DB_USER,
+    host: process.env.DB_HOST,
+    database: process.env.DB_NAME,
+    password: process.env.DB_PASSWORD,
+    port: parseInt(process.env.DB_PORT || '5441'),
+    max: 10,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 2000,
+});
 
 const createLogger = require('./utils/createLogger');
 const logger = createLogger('config');
@@ -132,13 +144,185 @@ app.post('/api/config', (req, res) => {
 });
 
 // ==========================================
+// INGESTION TUNING API
+// GET  /api/env/tuning  — returns current tunable env values
+// PATCH /api/env/tuning — updates one or more env keys, optionally restarts service
+// ==========================================
+const TUNABLE_KEYS = [
+    'MQTT_BROKER_URL', 'MQTT_TOPICS', 'MQTT_BROKER_ID', 'MQTT_PORT',
+    'DB_USER', 'DB_HOST', 'DB_NAME', 'DB_PASSWORD', 'DB_PORT',
+    'BATCH_SIZE', 'MAX_CONCURRENT_WRITERS', 'BATCH_TIMEOUT',
+    'REDIS_STREAM_MAXLEN', 'MIN_NODE_WORKERS', 'MAX_NODE_WORKERS',
+    'LOG_LEVEL', 'DEBUG_MODE', 'DEBUG_MODE_INGESTION', 'DEBUG_MODE_CONFIG', 'HEALTH_PORT', 'PORT', 'ADMIN_USER', 'ADMIN_PASS'
+];
+
+app.get('/api/env/tuning', (req, res) => {
+    try {
+        if (!fs.existsSync(ENV_FILE)) return res.status(404).json({ error: '.env not found' });
+        const content = fs.readFileSync(ENV_FILE, 'utf-8');
+        const all = parseEnv(content);
+        const tuning = {};
+        TUNABLE_KEYS.forEach(k => { if (all[k] !== undefined) tuning[k] = all[k]; });
+
+        let brokers = [];
+        if (fs.existsSync(BROKERS_FILE)) {
+            try {
+                brokers = JSON.parse(fs.readFileSync(BROKERS_FILE, 'utf-8'));
+            } catch (e) {
+                logger.error('Error parsing brokers.json', e);
+            }
+        }
+
+        res.json({ tuning, brokers, allowedKeys: TUNABLE_KEYS });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.patch('/api/env/tuning', (req, res) => {
+    try {
+        const { updates, brokers, restart } = req.body;
+        
+        let content = fs.existsSync(ENV_FILE) ? fs.readFileSync(ENV_FILE, 'utf-8') : '';
+        let envConfig = parseEnv(content);
+
+        // 1. Handle regular env updates
+        if (updates && typeof updates === 'object') {
+            const rejected = Object.keys(updates).filter(k => !TUNABLE_KEYS.includes(k));
+            if (rejected.length > 0) {
+                return res.status(400).json({ error: `Keys not allowed: ${rejected.join(', ')}` });
+            }
+            Object.entries(updates).forEach(([k, v]) => { envConfig[k] = String(v); });
+        }
+
+        // 2. Handle Brokers Metadata and Sync
+        if (brokers && Array.isArray(brokers)) {
+            fs.writeFileSync(BROKERS_FILE, JSON.stringify(brokers, null, 2));
+            
+            // Sync .env with broker details
+            envConfig['MQTT_BROKER_URL'] = brokers.map(b => b.url).join(',');
+            envConfig['MQTT_BROKER_ID'] = brokers.map(b => {
+                try {
+                    const urlObj = new URL(b.url.includes('://') ? b.url : 'mqtt://' + b.url);
+                    const ip = urlObj.hostname.replace(/\./g, '_');
+                    return `${b.type}_${ip}`;
+                } catch (e) {
+                    return `SOURCE_${b.id}`;
+                }
+            }).join(',');
+        }
+
+        const newContent = Object.entries(envConfig).map(([k, v]) => `${k}=${v}`).join('\n');
+        fs.writeFileSync(ENV_FILE, newContent);
+
+        logger.info({ updates, brokers: !!brokers }, 'Ingestion tuning updated via UI');
+
+        if (restart || brokers) {
+            exec('net stop "i2v-MQTT-Ingestion-Service" && net start "i2v-MQTT-Ingestion-Service"',
+                { timeout: 30000 }, (err) => {
+                    if (err) logger.error('Auto-restart failed:', err.message);
+                    else logger.info('Ingestion service restarted after tuning update');
+                });
+            return res.json({ success: true, message: 'Config saved. Ingestion service restarting...', restarting: true });
+        }
+
+        res.json({ success: true, message: 'Config saved. Restart the ingestion service to apply.', restarting: false });
+    } catch (err) {
+        logger.error(err, 'Tuning update error');
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ==========================================
+// 10. CAMERA REGISTRY API
+// ==========================================
+app.get('/api/cameras', async (req, res) => {
+    try {
+        const result = await dbPool.query(`
+            SELECT camera_id, camera_name, camera_ip as source_ip, latitude, longitude 
+            FROM camera_master 
+            ORDER BY camera_id ASC
+        `);
+        res.json({ cameras: result.rows });
+    } catch (e) {
+        logger.error("Failed to fetch cameras from DB", e);
+        res.status(500).json({ error: "Database error: " + e.message });
+    }
+});
+
+app.post('/api/cameras/:id/geodata', async (req, res) => {
+    const { id } = req.params;
+    const { latitude, longitude } = req.body;
+    
+    try {
+        await dbPool.query(
+            'UPDATE camera_master SET latitude = $1, longitude = $2 WHERE camera_id = $3',
+            [latitude, longitude, id]
+        );
+        res.json({ success: true });
+    } catch (e) {
+        logger.error(`Failed to update geodata for camera ${id}`, e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/cameras/bulk', async (req, res) => {
+    const { updates } = req.body;
+    if (!updates || !Array.isArray(updates)) {
+        return res.status(400).json({ error: "Updates must be an array" });
+    }
+
+    const results = { success: 0, failed: [] };
+    const client = await dbPool.connect();
+    try {
+        await client.query('BEGIN');
+        for (const item of updates) {
+            try {
+                if (!item.camera_id) throw new Error("Missing camera_id");
+                
+                // VALIDATION: ID and IP must be numeric-ish
+                const isNumericId = /^\d+(\.\d+)?$/.test(String(item.camera_id));
+                if (!isNumericId) throw new Error(`Invalid Camera ID format: "${item.camera_id}". Must be numeric (int/float).`);
+
+                // Allow empty/null values for coords to clear them
+                const lat = item.latitude === '' || item.latitude === undefined || item.latitude === null ? null : parseFloat(item.latitude);
+                const lon = item.longitude === '' || item.longitude === undefined || item.longitude === null ? null : parseFloat(item.longitude);
+
+                const resUpdate = await client.query(`
+                    UPDATE camera_master 
+                    SET latitude = $1, longitude = $2, updated_at = NOW()
+                    WHERE camera_id = $3
+                `, [lat, lon, item.camera_id]);
+
+                if (resUpdate.rowCount === 0) {
+                    results.failed.push({ id: item.camera_id, error: "Camera ID not found in registry" });
+                } else {
+                    results.success++;
+                }
+            } catch (err) {
+                results.failed.push({ id: item.camera_id || 'UNKNOWN', error: err.message });
+            }
+        }
+        await client.query('COMMIT');
+        res.json(results);
+    } catch (err) {
+        await client.query('ROLLBACK');
+        logger.error("Bulk camera update failed", err);
+        res.status(500).json({ error: "Transaction failed" });
+    } finally {
+        client.release();
+    }
+});
+
+// ==========================================
 // 2. SERVICE CONTROL API
 // ==========================================
 const SERVICES = {
     'ingestion': 'i2v-MQTT-Ingestion-Service',
     'db': 'i2v-mqtt-ingestion-PGSQL-5441',
     'telegraf': 'i2v-telegraf',
-    'influxdb': 'i2v-influxdb'
+    'influxdb': 'i2v-influxdb',
+    'redis': 'i2v-redis'
 };
 
 let lastServiceStatus = null;
@@ -161,7 +345,8 @@ app.get('/api/services', (req, res) => {
         'ingestion': 'mqtt_ingestion', // Matches mqtt_ingestion_service.exe
         'db': 'postgres.exe',
         'telegraf': 'telegraf.exe',
-        'influxdb': 'influxdb3.exe'
+        'influxdb': 'influxdb3.exe',
+        'redis': 'redis-server.exe'
     };
 
     const finish = (key, state) => {
@@ -267,7 +452,8 @@ function fetchPorts(statuses, callback) {
         'ingestion': '1883',
         'db': process.env.DB_PORT || '5441',
         'telegraf': 'Client Mode (No Port)',
-        'influxdb': 'Unknown'
+        'influxdb': 'Unknown',
+        'redis': '6379'
     };
 
     if (statuses['influxdb'] === 'NOT INSTALLED') {
@@ -289,6 +475,25 @@ function fetchPorts(statuses, callback) {
         callback(ports);
     });
 }
+
+// Proxy advanced worker health from ingestion service
+app.get('/api/ingestion-health', (req, res) => {
+    const healthReq = http.get('http://127.0.0.1:3333/health', (healthRes) => {
+        let data = '';
+        healthRes.on('data', d => data += d);
+        healthRes.on('end', () => {
+            try { res.json(JSON.parse(data)); }
+            catch { res.status(502).json({ error: 'Invalid response from ingestion service' }); }
+        });
+    });
+    healthReq.on('error', (err) => {
+        res.status(503).json({ error: 'Ingestion service unreachable', details: err.message });
+    });
+    healthReq.setTimeout(2000, () => {
+        healthReq.abort();
+        if (!res.headersSent) res.status(504).json({ error: 'Ingestion service timeout' });
+    });
+});
 
 // ==========================================
 // LOGS API (HYBRID: MEMORY + DISK)

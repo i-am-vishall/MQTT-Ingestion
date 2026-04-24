@@ -1,0 +1,286 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "links": [],
+  "liveNow": true,
+  "refresh": "5s",
+  "schemaVersion": 42,
+  "tags": ["crowd", "redis", "realtime"],
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": { "refresh_intervals": ["1s", "2s", "5s", "10s", "30s", "1m"] },
+  "timezone": "browser",
+  "title": "CROWD MANAGEMENT — REDIS LIVE",
+  "uid": "ICCC-Crowd-Redis-v2",
+  "version": 2,
+
+  "panels": [
+
+    {
+      "id": 1, "type": "text", "title": "", "transparent": true,
+      "gridPos": { "h": 2, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "mode": "html",
+        "content": "<div style=\"display:flex;justify-content:space-between;align-items:center;width:100%;height:100%;\"><div style=\"font-size:25px;font-weight:bold;\">MALWEEYA DWEEP GHAT CROWD MANAGEMENT</div><div style=\"display:flex;align-items:center;\"><span style=\"color:#FF0000;font-size:20px;margin-right:10px;\">●</span><span style=\"color:#FF0000;font-weight:bold;font-size:20px;\">REDIS LIVE</span></div></div>"
+      }
+    },
+
+    {
+      "id": 2, "type": "gauge",
+      "title": "Malweeya Ghat Total Live Crowd",
+      "description": "SUM of all values in crowd:group:malweeya_dweep hash — pure Redis, zero DB queries.",
+      "gridPos": { "h": 8, "w": 13, "x": 0, "y": 2 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short", "min": 0, "max": 20000,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": 0 },
+            { "color": "yellow", "value": 8000 },
+            { "color": "red", "value": 15000 }
+          ]}
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["sum"], "values": false },
+        "orientation": "auto", "showThresholdMarkers": true,
+        "text": { "titleSize": 20, "valueSize": 50 }
+      },
+      "targets": [{
+        "refId": "A",
+        "datasource": { "type": "redis-datasource", "uid": "ffilksipb7thca" },
+        "command": "hgetall",
+        "keyName": "crowd:group:malweeya_dweep",
+        "type": "Hash"
+      }]
+    },
+
+    {
+      "id": 3, "type": "bargauge",
+      "title": "JAL_CHOWKI_TOWER_PTZ — Live",
+      "description": "HGETALL crowd:cam:JAL_CHOWKI_TOWER_PTZ — count field from camera hash.",
+      "gridPos": { "h": 8, "w": 11, "x": 13, "y": 2 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "continuous-GrYlRd" }, "min": 0,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": 0 }, { "color": "red", "value": 80 }
+          ]}
+        }, "overrides": []
+      },
+      "options": {
+        "displayMode": "basic", "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/^count$/", "values": false }
+      },
+      "targets": [{
+        "refId": "A",
+        "datasource": { "type": "redis-datasource", "uid": "ffilksipb7thca" },
+        "command": "hgetall",
+        "keyName": "crowd:cam:JAL_CHOWKI_TOWER_PTZ",
+        "type": "Hash"
+      }]
+    },
+
+    {
+      "id": 4, "type": "timeseries",
+      "title": "🔄 Total Crowd Flow (Historical — PostgreSQL)",
+      "description": "1-min bucketed aggregates from camera_metrics_1min. Redis has no time history.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 10 },
+      "datasource": { "type": "grafana-postgresql-datasource", "uid": "bf78vb3wtk7i8a" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "continuous-GrYlRd" },
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 20, "lineWidth": 3, "gradientMode": "scheme" }
+        }, "overrides": []
+      },
+      "options": { "legend": { "displayMode": "hidden" }, "tooltip": { "mode": "single" } },
+      "targets": [{
+        "refId": "A",
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "bf78vb3wtk7i8a" },
+        "editorMode": "code", "rawQuery": true, "format": "time_series",
+        "rawSql": "SELECT bucket_time as time, SUM(crowd_count) as value FROM camera_metrics_1min WHERE $__timeFilter(bucket_time) GROUP BY bucket_time ORDER BY bucket_time"
+      }]
+    },
+
+    {
+      "id": 5, "type": "text", "title": "", "transparent": true,
+      "gridPos": { "h": 2, "w": 24, "x": 0, "y": 18 },
+      "options": {
+        "mode": "html",
+        "content": "<div style=\"display:flex;justify-content:space-between;align-items:center;width:100%;height:100%;\"><div style=\"font-size:25px;font-weight:bold;\">CROWD ESTIMATION PTZ CAMERAS</div><span style=\"color:#FF0000;font-weight:bold;font-size:16px;\">● REDIS LIVE</span></div>"
+      }
+    },
+
+    {
+      "id": 6, "type": "bargauge",
+      "title": "PTZ Estimation Cameras (JAL_CHOWKI + MAHILA_GHAT)",
+      "description": "crowd:group:ptz — one bar per PTZ camera, updates every 5s from Redis.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "continuous-GrYlRd" }, "min": 0,
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": 0 }, { "color": "red", "value": 80 }
+          ]}
+        }, "overrides": []
+      },
+      "options": {
+        "displayMode": "lcd", "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "values": true },
+        "showUnfilled": true
+      },
+      "targets": [{
+        "refId": "A",
+        "datasource": { "type": "redis-datasource", "uid": "ffilksipb7thca" },
+        "command": "hgetall",
+        "keyName": "crowd:group:ptz",
+        "type": "Hash"
+      }]
+    },
+
+    {
+      "id": 7, "type": "table",
+      "title": "REAL-TIME ALERTS (All Cameras — Redis Leaderboard)",
+      "description": "ZREVRANGE crowd:by_name — top 100 by live crowd count. Zero DB.",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 28 },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": 0 }, { "color": "yellow", "value": 20 }, { "color": "red", "value": 80 }
+          ]},
+          "custom": { "align": "center", "cellOptions": { "type": "color-background" } }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Score" }, "properties": [
+            { "id": "displayName", "value": "Crowd Count" }, { "id": "custom.width", "value": 150 }
+          ]},
+          { "matcher": { "id": "byName", "options": "Member" }, "properties": [
+            { "id": "displayName", "value": "Camera Name" }, { "id": "custom.width", "value": 320 }
+          ]}
+        ]
+      },
+      "options": { "cellHeight": "md", "showHeader": true },
+      "targets": [{
+        "refId": "A",
+        "datasource": { "type": "redis-datasource", "uid": "ffilksipb7thca" },
+        "command": "zrevrange",
+        "keyName": "crowd:by_name",
+        "count": 100,
+        "type": "ZSet",
+        "withScores": true
+      }]
+    },
+
+    {
+      "id": 8, "type": "stat",
+      "title": "Active Cameras (Redis)",
+      "description": "ZCARD crowd:by_name — cameras that sent crowd events in the last 5 minutes.",
+      "gridPos": { "h": 9, "w": 8, "x": 0, "y": 40 },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": 0 }, { "color": "red", "value": 500 }
+          ]}
+        }, "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "targets": [{
+        "refId": "A",
+        "datasource": { "type": "redis-datasource", "uid": "ffilksipb7thca" },
+        "command": "zcard",
+        "keyName": "crowd:by_name",
+        "type": "ZSet"
+      }]
+    },
+
+    {
+      "id": 9, "type": "barchart",
+      "title": "📍 Malweeya Dweep — Per-Camera Breakdown",
+      "description": "HGETALL crowd:group:malweeya_dweep — each camera as a bar.",
+      "gridPos": { "h": 9, "w": 16, "x": 8, "y": 40 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "fillOpacity": 80 }, "unit": "short"
+        }, "overrides": []
+      },
+      "options": {
+        "barWidth": 0.8, "orientation": "auto", "showValue": "auto",
+        "legend": { "displayMode": "list", "placement": "right", "showLegend": false },
+        "tooltip": { "mode": "single" }
+      },
+      "targets": [{
+        "refId": "A",
+        "datasource": { "type": "redis-datasource", "uid": "ffilksipb7thca" },
+        "command": "hgetall",
+        "keyName": "crowd:group:malweeya_dweep",
+        "type": "Hash"
+      }]
+    },
+
+    {
+      "id": 10, "type": "table",
+      "title": "⚠️ Overcrowded Cameras (count > 50)",
+      "description": "ZREVRANGEBYSCORE crowd:by_name — cameras above threshold. Pure Redis.",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 49 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "center" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "yellow", "value": 50 }, { "color": "red", "value": 100 }
+          ]}
+        }, "overrides": []
+      },
+      "options": { "cellHeight": "sm", "showHeader": true },
+      "targets": [{
+        "refId": "A",
+        "datasource": { "type": "redis-datasource", "uid": "ffilksipb7thca" },
+        "command": "zrevrangebyscore",
+        "keyName": "crowd:by_name",
+        "max": "+inf",
+        "min": "51",
+        "type": "ZSet",
+        "withScores": true
+      }]
+    },
+
+    {
+      "id": 11, "type": "stat",
+      "title": "Total Live People — All Zones",
+      "description": "SUM across malweeya_dweep + ptz + other from Redis hashes.",
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 49 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": 0 }, { "color": "red", "value": 50000 }
+          ]}
+        }, "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["sum"], "values": false },
+        "colorMode": "value", "graphMode": "area",
+        "text": { "valueSize": 60 }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "redis-datasource", "uid": "ffilksipb7thca" },
+          "command": "hgetall", "keyName": "crowd:group:malweeya_dweep", "type": "Hash"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "redis-datasource", "uid": "ffilksipb7thca" },
+          "command": "hgetall", "keyName": "crowd:group:ptz", "type": "Hash"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "redis-datasource", "uid": "ffilksipb7thca" },
+          "command": "hgetall", "keyName": "crowd:group:other", "type": "Hash"
+        }
+      ]
+    }
+
+  ]
+}

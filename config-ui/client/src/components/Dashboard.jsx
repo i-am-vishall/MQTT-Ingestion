@@ -8,7 +8,8 @@ const SERVICE_LABELS = {
     'ingestion': 'MQTT Ingestion Service',
     'db': 'PostgreSQL Database',
     'telegraf': 'Telegraf Monitoring',
-    'influxdb': 'InfluxDB 3.0'
+    'influxdb': 'InfluxDB 3.0',
+    'redis': 'Redis Stream Buffer'
 };
 
 export default function Dashboard() {
@@ -113,6 +114,7 @@ export default function Dashboard() {
                     <div className="grid grid-cols-1 gap-4">
                         <StatusRow id="ingestion" label={SERVICE_LABELS['ingestion']} status={statuses['ingestion']} />
                         <StatusRow id="db" label={SERVICE_LABELS['db']} status={statuses['db']} />
+                        <StatusRow id="redis" label={SERVICE_LABELS['redis']} status={statuses['redis']} />
                         <StatusRow id="telegraf" label={SERVICE_LABELS['telegraf']} status={statuses['telegraf']} />
                         <StatusRow id="influxdb" label={SERVICE_LABELS['influxdb']} status={statuses['influxdb']} />
                     </div>

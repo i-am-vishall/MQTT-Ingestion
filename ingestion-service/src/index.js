@@ -41,6 +41,11 @@ logger.info('===================================================');
 logger.info(`STEP 2/6: Initializing Database Connection Pool... (Target: ${config.db.database} @ ${config.db.host}:${config.db.port})`);
 const pool = new Pool(config.db);
 
+// Force every DB connection to use IST (+5:30) so Grafana time filters align correctly
+pool.on('connect', (client) => {
+    client.query("SET timezone = 'Asia/Kolkata'").catch(e => logger.warn('Failed to set session timezone:', e.message));
+});
+
 // FIX #1: BATCH QUEUE CLASS (Prevents race condition in concurrent flushing)
 // ============================================================
 class BatchQueue {
@@ -121,43 +126,7 @@ async function verifyDB() {
 
         if (existingTables < 4) {
             logger.warn(`STEP 3.1/6: Only ${existingTables}/4 core tables found. Attempting auto-initialization...`);
-
-            // Try to find and run init_schema.sql
-            const fs = require('fs');
-            const schemaSearchPaths = [
-                path.join(path.dirname(process.execPath), 'init_schema.sql'),
-                path.join(path.dirname(process.execPath), 'db', 'init_schema.sql'),
-                path.join(process.cwd(), 'init_schema.sql'),
-                path.join(process.cwd(), 'db', 'init_schema.sql'),
-                path.join(__dirname, '..', 'init_schema.sql'),
-                path.join(__dirname, '..', '..', 'db', 'init_schema.sql'),
-                'C:\\Program Files (x86)\\i2v-MQTT-Ingestion\\db\\init_schema.sql',
-                'C:\\Program Files (x86)\\i2v-MQTT-Ingestion\\init_schema.sql'
-            ];
-
-            let schemaApplied = false;
-            for (const schemaPath of schemaSearchPaths) {
-                if (fs.existsSync(schemaPath)) {
-                    logger.info(`   > Found schema at: ${schemaPath}`);
-                    try {
-                        const sql = fs.readFileSync(schemaPath, 'utf8');
-                        await client.query(sql);
-                        logger.info('STEP 3.2/6: Database schema auto-initialized successfully!');
-                        schemaApplied = true;
-                        break;
-                    } catch (sqlErr) {
-                        logger.warn({ err: sqlErr.message }, 'Schema execution had issues (may be partial)');
-                        // Continue - some errors are OK (e.g., already exists)
-                        schemaApplied = true;
-                        break;
-                    }
-                }
-            }
-
-            if (!schemaApplied) {
-                logger.warn('Could not find init_schema.sql for auto-init. Tables may be missing.');
-                logger.warn('Searched paths: ' + schemaSearchPaths.join(', '));
-            }
+            await restoreSchema(client);
         } else {
             logger.info('STEP 3.1/6: All core tables verified.');
         }
@@ -167,10 +136,79 @@ async function verifyDB() {
         // Load Rules & Mappings
         await loadRules();
         await loadMappings();
+
+        // Start Self-Healing Watchdog
+        startDatabaseWatchdog();
+
     } catch (err) {
         logger.fatal(err, 'STEP 3/6 [FAILED]: Could not connect to Database');
         process.exit(1);
     }
+}
+
+async function restoreSchema(client) {
+    const fs = require('fs');
+    const schemaSearchPaths = [
+        path.join(path.dirname(process.execPath), 'init_schema.sql'),
+        path.join(path.dirname(process.execPath), 'db', 'init_schema.sql'),
+        path.join(process.cwd(), 'init_schema.sql'),
+        path.join(process.cwd(), 'db', 'init_schema.sql'),
+        path.join(__dirname, '..', 'init_schema.sql'),
+        path.join(__dirname, '..', '..', 'db', 'init_schema.sql'),
+        'C:\\Program Files (x86)\\i2v-MQTT-Ingestion\\db\\init_schema.sql',
+        'C:\\Program Files (x86)\\i2v-MQTT-Ingestion\\init_schema.sql'
+    ];
+
+    let schemaApplied = false;
+    for (const schemaPath of schemaSearchPaths) {
+        if (fs.existsSync(schemaPath)) {
+            logger.info(`   > Found schema at: ${schemaPath}`);
+            try {
+                const sql = fs.readFileSync(schemaPath, 'utf8');
+                await client.query(sql);
+                logger.info('Self-healing: Database schema auto-initialized/restored successfully!');
+                schemaApplied = true;
+                break;
+            } catch (sqlErr) {
+                logger.warn({ err: sqlErr.message }, 'Schema execution had issues (may be partial)');
+                schemaApplied = true;
+            }
+        }
+    }
+    return schemaApplied;
+}
+
+/**
+ * DB WATCHDOG: Periodic Health Check & Auto-Restoration
+ */
+function startDatabaseWatchdog() {
+    const WATCHDOG_INTERVAL_MS = 5 * 60 * 1000; // 5 Minutes
+    
+    setInterval(async () => {
+        let client;
+        try {
+            client = await pool.connect();
+            const tableCheck = await client.query(`
+                SELECT COUNT(*) as cnt FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name IN ('mqtt_events', 'live_camera_state', 'anpr_event_fact', 'event_classification_rules')
+            `);
+
+            if (parseInt(tableCheck.rows[0].cnt) < 4) {
+                logger.error('Watchdog ALERT: Core tables missing! Triggering self-healing...');
+                await restoreSchema(client);
+                // Reload metadata after restoration
+                await loadRules();
+                await loadMappings();
+            }
+        } catch (err) {
+            logger.error({ err: err.message }, 'Watchdog check failed (DB might be down)');
+        } finally {
+            if (client) client.release();
+        }
+    }, WATCHDOG_INTERVAL_MS);
+    
+    logger.info('STEP 3.2/6: Database Self-Healing Watchdog STARTED.');
 }
 
 async function loadRules() {
@@ -491,37 +529,105 @@ async function flushBatch() {
 
                     // 1. Insert Raw Events
                     const queryText = `
-                        INSERT INTO mqtt_events(event_time, camera_id, event_type, severity, payload, source_id, source_ip, camera_name)
-                        VALUES($1, $2, $3, $4, $5, $6, $7, $8)
+                        INSERT INTO mqtt_events(event_time, camera_id, event_type, severity, payload, source_id, source_ip, camera_name, event_hash)
+                        VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                        ON CONFLICT (event_hash, event_time) DO NOTHING
                     `;
 
                     for (const msg of batch) {
+                        // Ensure event_time is always a safe string (defense-in-depth)
+                        const evTime = typeof msg.event_time === 'string'
+                            ? msg.event_time
+                            : (msg.event_time instanceof Date ? msg.event_time.toISOString() : new Date().toISOString());
+
                         // Raw Insert
                         await client.query(queryText, [
-                            msg.event_time,
+                            evTime,
                             msg.camera_id,
                             msg.event_type,
                             msg.severity,
                             msg.payload,
                             msg.normalized?.source_id || 'UNKNOWN_SOURCE',
                             msg.normalized?.source_ip,
-                            msg.normalized?.camera_name || 'UNKNOWN'
+                            msg.normalized?.camera_name || 'UNKNOWN',
+                            msg._hash || null
                         ]);
 
                         // 2. Classify and Update Live State
                         await processLiveState(client, msg);
 
+                        // 2.1 Auto-Sync Camera Registry
+                        await upsertCameraMaster(client, msg);
+
 
                         // 3. Process ANPR Facts
                         const isAnpr = msg.normalized?.event_type === 'ANPR' || msg.event_type === 'ANPR';
                         const isFrs = msg.normalized?.event_type === 'Face_Recognition' || msg.event_type === 'Face_Recognition';
+                        
+                        const eventTypeStr = msg.normalized?.event_type || msg.event_type || '';
+                        const isAtcc = eventTypeStr === 'Highway_ATCC';
+                        const isOccupancy = eventTypeStr === 'Vehicle_Occupancy';
+                        const vidsEvents = ['Wrong_Way', 'Stopped_Vehicle', 'Pedestrian_Crossing', 'Speeding', 'Illegal_Parking', 'Overspeed', 'Underspeed', 'Animal_Detected', 'VIDS'];
+                        const isVids = vidsEvents.includes(eventTypeStr) || eventTypeStr.includes('VIDS');
 
-                        // 4. Process FRS Facts
+                        // 4. Process Specific Facts
                         if (isFrs) {
                             await processFrsFact(client, msg);
                         } else if (isAnpr) {
                             await processAnprFact(client, msg);
+                        } else if (isAtcc) {
+                            await processAtccFact(client, msg);
+                        } else if (isOccupancy) {
+                            await processOccupancyFact(client, msg);
+                        } else if (isVids) {
+                            await processVidsFact(client, msg);
                         }
+                    }
+
+                    // 5. Bulk Upsert Camera Master
+                    const uniqueCameras = new Map();
+                    for (const msg of batch) {
+                        const norm = msg.normalized;
+                        if (norm && norm.camera_id && norm.camera_id !== 'UNKNOWN') {
+                            
+                            // VALIDATION: Camera ID and IP must be numeric-friendly
+                            const isNumericId = /^\d+(\.\d+)?$/.test(String(norm.camera_id));
+                            const devIp = norm.device_ip || '0.0.0.0';
+                            const isNumericIp = /^[\d\.]+$/.test(String(devIp));
+
+                            if (!isNumericId) {
+                                logger.debug({ id: norm.camera_id }, 'Skipping non-numeric camera_id from registry');
+                                continue;
+                            }
+
+                            uniqueCameras.set(norm.camera_id, {
+                                camera_id: norm.camera_id,
+                                camera_name: norm.camera_name || 'UNKNOWN',
+                                camera_ip: isNumericIp ? devIp : '0.0.0.0'
+                            });
+                        }
+                    }
+
+                    if (uniqueCameras.size > 0) {
+                        const camValues = [];
+                        const camParams = [];
+                        let cIdx = 1;
+                        for (const [id, cam] of uniqueCameras) {
+                            camValues.push(`($${cIdx++}, $${cIdx++}, $${cIdx++}, true, NOW())`);
+                            camParams.push(cam.camera_id, cam.camera_name, cam.camera_ip);
+                        }
+                        await client.query(`
+                            INSERT INTO camera_master (camera_id, camera_name, camera_ip, is_active, updated_at)
+                            VALUES ${camValues.join(',')}
+                            ON CONFLICT (camera_id) DO UPDATE SET
+                                camera_name = EXCLUDED.camera_name,
+                                camera_ip = EXCLUDED.camera_ip,
+                                is_active = true,
+                                updated_at = NOW()
+                            WHERE camera_master.camera_name IS DISTINCT FROM EXCLUDED.camera_name 
+                               OR camera_master.camera_ip IS DISTINCT FROM EXCLUDED.camera_ip
+                               OR camera_master.is_active = false
+                        `, camParams);
                     }
 
                     await client.query('COMMIT');
@@ -650,19 +756,56 @@ async function processLiveState(dbClient, msg) {
     }
 }
 
+/**
+ * AUTO-REGISTER CAMERAS
+ * Ensures camera_master is always in sync with incoming streams.
+ * Does NOT overwrite manual Lat/Long settings if they exist.
+ */
+async function upsertCameraMaster(dbClient, msg) {
+    try {
+        const norm = msg.normalized;
+        if (!norm || !norm.camera_id || norm.camera_id === 'UNKNOWN') return;
+
+        await dbClient.query(`
+            INSERT INTO camera_master (camera_id, camera_name, camera_ip, is_active, updated_at)
+            VALUES ($1, $2, $3, true, NOW())
+            ON CONFLICT (camera_id) DO UPDATE SET
+                camera_name = EXCLUDED.camera_name,
+                camera_ip = EXCLUDED.camera_ip,
+                is_active = true,
+                updated_at = NOW()
+            WHERE camera_master.camera_name IS DISTINCT FROM EXCLUDED.camera_name 
+               OR camera_master.camera_ip IS DISTINCT FROM EXCLUDED.camera_ip
+               OR camera_master.is_active = false
+        `, [
+            norm.camera_id,
+            norm.camera_name || 'UNKNOWN',
+            norm.source_ip || '0.0.0.0'
+        ]);
+    } catch (err) {
+        // Silent error for master registry to avoid blocking main pipe
+        if (logger.debug) logger.debug({ err: err.message, cameraId: msg.camera_id }, 'Registry sync note');
+    }
+}
+
 async function processAnprFact(dbClient, event) {
     try {
         const norm = event.normalized;
         if (!norm) return;
 
+        // Ensure event_time is always a safe ISO string (defense-in-depth)
+        const evTime = typeof norm.event_time === 'string'
+            ? norm.event_time
+            : (norm.event_time instanceof Date ? norm.event_time.toISOString() : new Date().toISOString());
+
         await dbClient.query(`
             INSERT INTO anpr_event_fact
-    (event_time, camera_id, plate_number, vehicle_type, vehicle_color, vehicle_make,
-        is_violation, violation_types, speed, source_type, source_name, source_id, source_ip, camera_name)
-VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-            ON CONFLICT (plate_number, camera_id, event_10s_bucket) DO NOTHING
-    `, [
-            norm.event_time,
+            (event_time, camera_id, plate_number, vehicle_type, vehicle_color, vehicle_make,
+             is_violation, violation_types, speed, source_type, source_name, source_id, source_ip, camera_name)
+            VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            ON CONFLICT ON CONSTRAINT uq_anpr_dedup DO NOTHING
+        `, [
+            evTime,
             norm.camera_id,
             norm.plate_number,
             norm.vehicle_type,
@@ -672,7 +815,7 @@ VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             norm.violation_types,
             norm.speed,
             norm.source_type,
-            norm.source_id,
+            norm.source_name || 'UNKNOWN',  // FIX: was duplicating source_id
             norm.source_id,
             norm.source_ip,
             norm.camera_name || 'UNKNOWN'
@@ -788,6 +931,95 @@ async function processFrsFact(dbClient, event) {
         logger.error({ err, cameraId: event.camera_id }, 'Error processing FRS fact');
     }
 }
+
+async function processAtccFact(dbClient, event) {
+    try {
+        const payload = event.payload || {};
+        let props = payload.properties || {};
+        if (typeof props === 'string') {
+            try { props = JSON.parse(props); } catch(e) {}
+        }
+        
+        const bus = parseInt(props.bus || '0');
+        const car = parseInt(props.car || '0');
+        const truck = parseInt(props.truck || '0');
+        const bicycle = parseInt(props.bicycle || '0');
+        const tractor = parseInt(props.tractor || '0');
+        const mini_bus = parseInt(props.mini_bus || '0');
+        const ambulance = parseInt(props.ambulance || '0');
+        const motorbike = parseInt(props.motorbike || '0');
+        const e_rickshaw = parseInt(props.e_rickshaw || '0');
+        const mini_truck = parseInt(props.mini_truck || '0');
+        const auto_rickshaw = parseInt(props.auto_rickshaw || '0');
+        const total = bus + car + truck + bicycle + tractor + mini_bus + ambulance + motorbike + e_rickshaw + mini_truck + auto_rickshaw;
+
+        await dbClient.query(`
+            INSERT INTO atcc_event_fact
+            (event_time, camera_id, camera_name, source_ip, bus, car, truck, bicycle, tractor, 
+             mini_bus, ambulance, motorbike, e_rickshaw, mini_truck, auto_rickshaw, total_count, snapshot_url)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+        `, [
+            event.event_time,
+            event.camera_id,
+            event.normalized?.camera_name || payload.cameraName || 'UNKNOWN',
+            event.normalized?.device_ip || payload.deviceIp || null,
+            bus, car, truck, bicycle, tractor, mini_bus, ambulance, motorbike, e_rickshaw, mini_truck, auto_rickshaw, total,
+            payload.snapshotApacheUrl || payload.snapshot || null
+        ]);
+    } catch (err) {
+        logger.error({ err, cameraId: event.camera_id }, 'Error processing ATCC fact');
+    }
+}
+
+async function processOccupancyFact(dbClient, event) {
+    try {
+        const payload = event.payload || {};
+        let props = payload.properties || {};
+        if (typeof props === 'string') {
+            try { props = JSON.parse(props); } catch(e) {}
+        }
+
+        await dbClient.query(`
+            INSERT INTO vehicle_occupancy_fact
+            (event_time, camera_id, camera_name, source_ip, event_properties, snapshot_url)
+            VALUES ($1, $2, $3, $4, $5, $6)
+        `, [
+            event.event_time,
+            event.camera_id,
+            event.normalized?.camera_name || payload.cameraName || 'UNKNOWN',
+            event.normalized?.device_ip || payload.deviceIp || null,
+            JSON.stringify(props),
+            payload.snapshotApacheUrl || payload.snapshot || null
+        ]);
+    } catch (err) {
+        logger.error({ err, cameraId: event.camera_id }, 'Error processing Occupancy fact');
+    }
+}
+
+async function processVidsFact(dbClient, event) {
+    try {
+        const payload = event.payload || {};
+        const eventTypeStr = event.normalized?.event_type || event.event_type || 'Unknown_VIDS';
+
+        await dbClient.query(`
+            INSERT INTO vids_event_fact
+            (event_time, camera_id, camera_name, source_ip, incident_type, severity, snapshot_url, properties)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `, [
+            event.event_time,
+            event.camera_id,
+            event.normalized?.camera_name || payload.cameraName || 'UNKNOWN',
+            event.normalized?.device_ip || payload.deviceIp || null,
+            eventTypeStr,
+            payload.severity || 'Medium',
+            payload.snapshotApacheUrl || payload.snapshot || null,
+            payload.properties || null
+        ]);
+    } catch (err) {
+        logger.error({ err, cameraId: event.camera_id }, 'Error processing VIDS fact');
+    }
+}
+
 
 async function runBucketJob() {
     try {
@@ -1033,13 +1265,35 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 
 process.on('uncaughtException', (err) => {
     console.error('CRITICAL: Uncaught Exception!', err);
-    logger.fatal(err, 'CRITICAL: Uncaught Exception! Service will restart.');
-    setTimeout(() => {
-        process.exit(1);
-    }, 500);
+    logger.fatal(err, 'CRITICAL: Uncaught Exception! Service is configured to ignore crash and continue running.');
+    // process.exit(1); // Disabled to prevent crash loops
 });
 
 process.on('unhandledRejection', (reason, promise) => {
     console.error('CRITICAL: Unhandled Rejection!', reason);
     logger.error({ err: reason, promise }, 'CRITICAL: Unhandled Rejection');
 });
+// ============================================================
+// GRACEFUL SHUTDOWN
+// ============================================================
+async function gracefulShutdown(signal) {
+    logger.info(`Shutdown signal received (${signal}). Closing connections...`);
+    
+    // 1. Stop MQTT
+    clients.forEach(c => c.end(true));
+    
+    // 2. Drain DB Pool
+    try {
+        await pool.end();
+        logger.info('Database pool drained.');
+    } catch (e) {
+        logger.error({ err: e.message }, 'Error draining DB pool');
+    }
+
+    logger.info('Service shutdown complete.');
+    process.exit(0);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('message', (msg) => { if (msg === 'shutdown') gracefulShutdown('NSSM_SHUTDOWN'); });

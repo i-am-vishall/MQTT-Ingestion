@@ -1,0 +1,131 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "ruthless-realtime-test",
+    "title": "🔥 RUTHLESS REALTIME TEST DASHBOARD",
+    "tags": ["realtime", "load-test", "new-architecture"],
+    "timezone": "browser",
+    "schemaVersion": 38,
+    "version": 1,
+    "refresh": "5s",
+    "time": {"from": "now-5m", "to": "now"},
+    "panels": [
+      {
+        "id": 1,
+        "title": "⚡ Total Events/Sec (Last 5 Min) — mqtt_events",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 0},
+        "datasource": {"type": "grafana-postgresql-datasource", "uid": "bf78vb3wtk7i8a"},
+        "targets": [{
+          "rawSql": "SELECT date_trunc('second', event_time) AS time, COUNT(*) AS events_per_second FROM mqtt_events WHERE event_time >= NOW() - INTERVAL '5 minutes' GROUP BY 1 ORDER BY 1",
+          "format": "time_series",
+          "refId": "A"
+        }],
+        "fieldConfig": {
+          "defaults": {
+            "color": {"mode": "palette-classic"},
+            "custom": {"lineWidth": 2, "fillOpacity": 15},
+            "unit": "short",
+            "displayName": "Events/sec"
+          }
+        },
+        "options": {"tooltip": {"mode": "single"}}
+      },
+      {
+        "id": 2,
+        "title": "📊 Historical Aggregates Rollup (Dual-Write)",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+        "datasource": {"type": "grafana-postgresql-datasource", "uid": "bf78vb3wtk7i8a"},
+        "targets": [{
+          "rawSql": "SELECT bucket_time AS time, total_alerts, anpr_count, frs_count FROM historical_aggregates WHERE bucket_time >= NOW() - INTERVAL '5 minutes' ORDER BY 1",
+          "format": "time_series",
+          "refId": "A"
+        }]
+      },
+      {
+        "id": 3,
+        "title": "🚨 Total Alerts (Last 5 Min)",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 4, "x": 12, "y": 8},
+        "datasource": {"type": "grafana-postgresql-datasource", "uid": "bf78vb3wtk7i8a"},
+        "targets": [{
+          "rawSql": "SELECT COUNT(*) AS total FROM mqtt_events WHERE event_time >= NOW() - INTERVAL '5 minutes'",
+          "format": "table",
+          "refId": "A"
+        }],
+        "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"steps": [{"color": "green", "value": 0}, {"color": "yellow", "value": 100000}, {"color": "red", "value": 500000}]}}},
+        "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "graphMode": "none", "textMode": "value"}
+      },
+      {
+        "id": 4,
+        "title": "🚗 ANPR Events (Last 5 Min)",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 4, "x": 16, "y": 8},
+        "datasource": {"type": "grafana-postgresql-datasource", "uid": "bf78vb3wtk7i8a"},
+        "targets": [{
+          "rawSql": "SELECT COUNT(*) AS anpr_total FROM mqtt_events WHERE event_type = 'ANPR' AND event_time >= NOW() - INTERVAL '5 minutes'",
+          "format": "table",
+          "refId": "A"
+        }],
+        "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "blue"}}},
+        "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "graphMode": "none", "textMode": "value"}
+      },
+      {
+        "id": 5,
+        "title": "👥 Crowd Events (Last 5 Min)",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 4, "x": 20, "y": 8},
+        "datasource": {"type": "grafana-postgresql-datasource", "uid": "bf78vb3wtk7i8a"},
+        "targets": [{
+          "rawSql": "SELECT COUNT(*) AS crowd_total FROM mqtt_events WHERE event_type = 'Crowd_Detected' AND event_time >= NOW() - INTERVAL '5 minutes'",
+          "format": "table",
+          "refId": "A"
+        }],
+        "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "orange"}}},
+        "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "graphMode": "none", "textMode": "value"}
+      },
+      {
+        "id": 6,
+        "title": "📷 Live Camera States — live_camera_state table",
+        "type": "table",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+        "datasource": {"type": "grafana-postgresql-datasource", "uid": "bf78vb3wtk7i8a"},
+        "targets": [{
+          "rawSql": "SELECT camera_id, camera_name, source_type, crowd_count, crowd_state, vehicle_count, traffic_state, last_event_time, updated_at FROM live_camera_state ORDER BY updated_at DESC LIMIT 20",
+          "format": "table",
+          "refId": "A"
+        }],
+        "options": {"sortBy": [{"desc": true, "displayName": "updated_at"}]}
+      },
+      {
+        "id": 7,
+        "title": "🔔 Event Type Breakdown (Last 5 Min)",
+        "type": "piechart",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+        "datasource": {"type": "grafana-postgresql-datasource", "uid": "bf78vb3wtk7i8a"},
+        "targets": [{
+          "rawSql": "SELECT event_type, COUNT(*) AS count FROM mqtt_events WHERE event_time >= NOW() - INTERVAL '5 minutes' GROUP BY event_type ORDER BY count DESC",
+          "format": "table",
+          "refId": "A"
+        }],
+        "options": {"pieType": "pie", "legend": {"displayMode": "list", "placement": "right"}}
+      },
+      {
+        "id": 8,
+        "title": "⏱️ Latest Events Feed (Raw Stream)",
+        "type": "table",
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 24},
+        "datasource": {"type": "grafana-postgresql-datasource", "uid": "bf78vb3wtk7i8a"},
+        "targets": [{
+          "rawSql": "SELECT event_time, camera_id, camera_name, event_type, source_id, source_ip FROM mqtt_events ORDER BY event_time DESC LIMIT 50",
+          "format": "table",
+          "refId": "A"
+        }],
+        "options": {"sortBy": [{"desc": true, "displayName": "event_time"}]}
+      }
+    ]
+  },
+  "folderId": 0,
+  "overwrite": true
+}

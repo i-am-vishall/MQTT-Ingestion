@@ -17,7 +17,8 @@
     "scripts": {
         "start": "node src/index.js",
         "test": "echo \"Error: no test specified\" && exit 1",
-        "inspect": "node scripts/inspect_mqtt.js"
+        "inspect": "node scripts/inspect_mqtt.js",
+        "build:release": "node scripts/build_release.js"
     },
     "dependencies": {
         "dotenv": "^16.6.1",

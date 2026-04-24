@@ -11,7 +11,9 @@ import RuleEditor from './components/RuleEditor';
 import DeviceManager from './components/DeviceManager';
 import Admin from './components/Admin';
 import SchemaMapper from './components/SchemaMapper';
+import CameraMapping from './components/CameraMapping';
 import AdminLayout from './components/AdminLayout'; // The new layout
+import SystemConfigWrapper from './components/SystemConfigWrapper'; // The new unified config UI
 
 function App() {
   const navigate = useNavigate();
@@ -90,10 +92,11 @@ function App() {
             {/* Secure Admin Routes */}
             <Route path="/admin" element={<AdminLayout />}>
               <Route index element={<Navigate to="/admin/sources" replace />} />
-              <Route path="sources" element={<BrokerManager />} />
+              <Route path="sources" element={<SystemConfigWrapper initialTab="mqtt" />} />
               <Route path="devices" element={<DeviceManager />} />
+              <Route path="cameras" element={<CameraMapping />} />
               <Route path="schema" element={<SchemaMapper />} />
-              <Route path="config" element={<Admin />} />
+              <Route path="config" element={<SystemConfigWrapper initialTab="pipeline" />} />
             </Route>
 
             {/* Fallback */}

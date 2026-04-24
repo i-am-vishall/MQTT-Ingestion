@@ -1,8 +1,13 @@
 const pino = require('pino');
 const path = require('path');
+const fs = require('fs');
 
 // Use relative path so it works on any machine
-const logPath = path.join(process.cwd(), 'logs', 'normalization_debug.log');
+const logDir = path.join(process.cwd(), 'logs');
+if (!fs.existsSync(logDir)) {
+    fs.mkdirSync(logDir, { recursive: true });
+}
+const logPath = path.join(logDir, 'normalization_debug.log');
 const logger = pino({
     level: process.env.LOG_LEVEL || 'info',
 }, pino.destination(logPath));
@@ -12,39 +17,45 @@ const logger = pino({
 // Rule 2: All incoming events must be converted into a canonical internal schema
 // Rule 3: Time must be normalized once — at ingestion
 
+function extractDeviceIp(p) {
+    if (!p) return null;
+    return p.DeviceIP || p.deviceIp || p.device_ip || p.camera_ip || null;
+}
+
 /**
- * Universal function to normalize event time
- * @param {Object} payload 
- * @returns {Date}
+ * Universal function to normalize event time.
+ * ALWAYS returns an ISO 8601 string (e.g. "2026-04-21T10:30:00.000Z").
+ * This prevents PostgreSQL from ever receiving locale-specific timezone
+ * strings like "GMT+0530" which it cannot parse.
+ * @param {Object} payload
+ * @returns {string} ISO 8601 UTC timestamp
  */
 function normalizeEventTime(payload) {
-    if (!payload) return new Date();
+    const _toISO = (val) => {
+        // If it looks like a numeric string (Epoch), convert to Number first
+        if (typeof val === 'string' && /^\d{10,13}$/.test(val)) {
+            val = Number(val);
+        }
+        const d = new Date(val);
+        return isNaN(d.getTime()) ? null : d.toISOString();
+    };
 
-    // Epoch milliseconds (DetTime, ReceivedTime)
-    if (payload.DetTime && typeof payload.DetTime === 'number') {
-        return new Date(payload.DetTime);
+    if (!payload) return new Date().toISOString();
+
+    // 1. Check for known Epoch fields (Numbers or numeric strings)
+    const epochFields = ['DetTime', 'ReceivedTime', 'detectionTime', 'alertTimeEpoch'];
+    for (const f of epochFields) {
+        if (payload[f]) return _toISO(payload[f]) || new Date().toISOString();
     }
 
-    if (payload.ReceivedTime && typeof payload.ReceivedTime === 'number') {
-        return new Date(payload.ReceivedTime);
+    // 2. Check for known String fields (ISO, Local Time)
+    const stringFields = ['alertTime', 'event_time', 'time', 'timestamp'];
+    for (const f of stringFields) {
+        if (payload[f]) return _toISO(payload[f]) || new Date().toISOString();
     }
 
-    if (payload.detectionTime && typeof payload.detectionTime === 'number') {
-        return new Date(payload.detectionTime);
-    }
-
-    // ISO / local time strings
-    if (payload.alertTime) {
-        return new Date(payload.alertTime);
-    }
-
-    // Explicit event_time if already normalized or from other sources
-    if (payload.event_time) {
-        return new Date(payload.event_time);
-    }
-
-    // Fallback
-    return new Date();
+    // 3. Fallback to current time
+    return new Date().toISOString();
 }
 
 /**
@@ -55,10 +66,12 @@ function normalizeEventTime(payload) {
 function detectSource(payload) {
     if (!payload) return 'DEFAULT';
 
-    // VMS indicators
-    if (payload.EventName === 'ANPR' && payload.DeviceId) {
-        return 'VMS';
+    // ITMS (Traffic/ANPR) indicators
+    if (payload.EventName === 'ANPR' && (payload.DeviceId || payload.DeviceIP)) {
+        return 'ITMS';
     }
+
+    // VMS (General Alerts) indicators
     if (payload.alertType || payload.taskName) {
         return 'VMS';
     }
@@ -72,8 +85,8 @@ function detectSource(payload) {
     // Based on user prompt "Applications (direct to Grafana / ICCC) Alert JSON may differ"
     // "VMS / ITMS Servers Alert JSON consistent (same schema as worked so far)"
 
-    // If it has PlateNumber and DeviceIP it's likely VMS
-    if (payload.PlateNumber && payload.DeviceIP) return 'VMS';
+    // If it has PlateNumber and DeviceIP it's likely ITMS
+    if (payload.PlateNumber && payload.DeviceIP) return 'ITMS';
 
     return 'DEFAULT';
 }
@@ -119,10 +132,10 @@ function normalizeVmsAnpr(p) {
             p.IsDrivingWhileOnTheMobile
         ),
         violation_types: extractViolations(p),
-        violation_types: extractViolations(p),
         source_type: p._source_id ? 'VMS' : 'UNKNOWN',
         source_id: p._source_id || 'UNKNOWN_SOURCE',
-        source_ip: p._source_ip || null
+        source_ip: p._source_ip || null,
+        device_ip: extractDeviceIp(p)
     };
 }
 
@@ -144,7 +157,8 @@ function normalizeAppAnpr(p) {
         is_violation: p.violation === true,
         violation_types: p.violations || [],
         source_type: 'APP',
-        source_name: p.appName || 'UNKNOWN_APP'
+        source_name: p.appName || 'UNKNOWN_APP',
+        device_ip: extractDeviceIp(p)
     };
 }
 
@@ -166,12 +180,13 @@ function normalizeEvent(topic, payload) {
 
     if (isAnpr) {
         switch (sourceType) {
+            case 'ITMS':
             case 'VMS':
                 return normalizeVmsAnpr(payload);
             case 'APP':
                 return normalizeAppAnpr(payload);
             default:
-                // Fallback: try VMS normalizer as it's the legacy format
+                // Fallback: try ITMS normalizer as it's the standard server format
                 return normalizeVmsAnpr(payload);
         }
     }
@@ -192,8 +207,10 @@ function normalizeEvent(topic, payload) {
             source_name: 'UNKNOWN',
             source_id: payload._source_id || 'UNKNOWN_SOURCE',
             source_ip: payload._source_ip || null,
+            device_ip: extractDeviceIp(payload),
             camera_name: payload.DeviceName || payload.cameraName || 'UNKNOWN'
         };
+}
     }
 
     // Default / Pass-through for non-ANPR (Security, etc.)
@@ -221,6 +238,7 @@ function normalizeEvent(topic, payload) {
         source_name: 'UNKNOWN',
         source_id: payload._source_id || 'UNKNOWN_SOURCE',
         source_ip: payload._source_ip || null,
+        device_ip: extractDeviceIp(payload),
         camera_name: payload.DeviceName || payload.cameraName || payload.camera_name || 'UNKNOWN'
     };
 }
