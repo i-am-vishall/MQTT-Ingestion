@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Outlet, useNavigate, NavLink, useLocation } from 'react-router-dom';
-import { Lock, Unlock, Network, Database, MonitorCheck, Gavel, LogOut, X, Shield, MapPin } from 'lucide-react';
+import { Lock, Unlock, Network, Database, MonitorCheck, Gavel, LogOut, X, Shield, MapPin, Map, Users2 } from 'lucide-react';
 import axios from 'axios';
 
 const API_BASE = '/api';
@@ -141,11 +141,11 @@ const AdminLayout = () => {
             {/* Admin Header */}
             <div className="flex-none bg-surface border-b border-slate-800 flex justify-between items-center px-6 shadow-sm z-20">
                 <div className="flex overflow-x-auto">
-                    <NavTab to="/admin/sources" icon={Network} label="Data Sources" />
-                    <NavTab to="/admin/devices" icon={MonitorCheck} label="Device Monitoring" />
-                    <NavTab to="/admin/cameras" icon={MapPin} label="Camera Geodata" />
-                    <NavTab to="/admin/schema" icon={Database} label="Schema Mapping" />
-                    <NavTab to="/admin/config" icon={Gavel} label="System Config" />
+                    <NavTab to="/admin/sources"      icon={Network}      label="Data Sources" />
+                    <NavTab to="/admin/cameras"      icon={MapPin}        label="Camera Geodata" />
+                    <NavTab to="/admin/camera-zones" icon={Map}           label="Camera Zones" />
+                    <NavTab to="/admin/schema"       icon={Database}      label="Schema Mapping" />
+                    <NavTab to="/admin/config"       icon={Gavel}         label="System Config" />
                 </div>
 
                 <div className="flex items-center gap-4">

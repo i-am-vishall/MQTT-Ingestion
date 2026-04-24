@@ -48,7 +48,7 @@ const CameraMapping = () => {
     };
 
     const exportToCSV = () => {
-        const headers = ["camera_id", "camera_name", "source_ip", "latitude", "longitude"];
+        const headers = ["camera_id", "camera_name", "camera_ip", "latitude", "longitude"];
         
         // Helper to escape CSV fields (wraps in quotes and escapes existing quotes)
         const escape = (val) => {
@@ -62,7 +62,7 @@ const CameraMapping = () => {
         const rows = cameras.map(c => [
             escape(c.camera_id),
             escape(c.camera_name),
-            escape(c.source_ip),
+            escape(c.camera_ip),
             escape(c.latitude),
             escape(c.longitude)
         ]);
@@ -135,7 +135,7 @@ const CameraMapping = () => {
     const filtered = cameras.filter(c => 
         (c.camera_id || '').toLowerCase().includes(search.toLowerCase()) ||
         (c.camera_name || '').toLowerCase().includes(search.toLowerCase()) ||
-        (c.source_ip || '').toLowerCase().includes(search.toLowerCase())
+        (c.camera_ip || '').toLowerCase().includes(search.toLowerCase())
     );
 
     return (
@@ -228,7 +228,7 @@ const CameraMapping = () => {
                     <thead>
                         <tr className="bg-slate-900/50 text-slate-500 text-xs font-bold uppercase tracking-widest border-b border-slate-800">
                             <th className="px-6 py-4">Camera ID / Name</th>
-                            <th className="px-6 py-4">Source IP</th>
+                            <th className="px-6 py-4">Camera IP</th>
                             <th className="px-6 py-4">Latitude</th>
                             <th className="px-6 py-4">Longitude</th>
                             <th className="px-6 py-4 text-center">Action</th>
@@ -259,7 +259,7 @@ const CameraMapping = () => {
                                     </td>
                                     <td className="px-6 py-4">
                                         <span className="font-mono bg-slate-900 px-2 py-1 rounded text-primary border border-primary/20 text-xs">
-                                            {cam.source_ip || 'N/A'}
+                                            {cam.camera_ip || '—'}
                                         </span>
                                     </td>
                                     <td className="px-6 py-4">

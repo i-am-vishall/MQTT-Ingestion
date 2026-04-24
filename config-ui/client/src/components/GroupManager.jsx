@@ -5,21 +5,21 @@ import {
 } from 'lucide-react';
 import axios from 'axios';
 
-const API = '/api/zones';
+const API_CAMERAS      = '/api/cameras';
+const API_ZONES        = '/api/camera-zones';
+const API_ZONES_ASSIGN = '/api/camera-zones/assign';
 
 export default function GroupManager() {
     const [cameras, setCameras] = useState([]);
-    const [groups, setGroups] = useState([]);
+    const [groups, setGroups] = useState([]);   // list of group_name strings
     const [loading, setLoading] = useState(true);
     const [notification, setNotification] = useState(null);
 
-    // Group CRUD UI state
     const [newGroupName, setNewGroupName] = useState('');
     const [editingGroup, setEditingGroup] = useState(null);
     const [editName, setEditName] = useState('');
     const [showGroupPanel, setShowGroupPanel] = useState(false);
 
-    // Camera selection & mapping
     const [selectedCameraIds, setSelectedCameraIds] = useState(new Set());
     const [actionGroupTarget, setActionGroupTarget] = useState('');
     const [searchQuery, setSearchQuery] = useState('');
@@ -29,11 +29,13 @@ export default function GroupManager() {
         setLoading(true);
         try {
             const [cRes, gRes] = await Promise.all([
-                axios.get(`${API}/cameras`),
-                axios.get(API)
+                axios.get(API_CAMERAS),
+                axios.get(API_ZONES)
             ]);
             setCameras(cRes.data.cameras || []);
-            setGroups(gRes.data.zones || []);
+            // Build flat group name list from zones response
+            const groupNames = (gRes.data.groups || []).map(g => g.group_name);
+            setGroups(groupNames);
         } catch (err) {
             showNotification('Failed to load: ' + (err.response?.data?.error || err.message), 'error');
         }
@@ -64,10 +66,18 @@ export default function GroupManager() {
         const newName = editName.trim();
         if (!newName || !editingGroup || newName === editingGroup) { setEditingGroup(null); return; }
         try {
-            await axios.put(`${API}/rename`, { oldName: editingGroup, newName });
+            // Reassign all cameras in old group → new group name
+            const oldCamIds = cameras
+                .filter(c => c.group_name === editingGroup)
+                .map(c => c.camera_id);
+            if (oldCamIds.length > 0) {
+                await axios.post(API_ZONES_ASSIGN, { camera_ids: oldCamIds, group_name: newName });
+            }
+            // Delete old group entry
+            await axios.delete(`${API_ZONES}/${encodeURIComponent(editingGroup)}`);
             setEditingGroup(null);
             await fetchData();
-            showNotification(`Renamed to "${newName}"`);
+            showNotification(`Renamed "${editingGroup}" → "${newName}"`);
         } catch (err) {
             showNotification('Rename failed: ' + (err.response?.data?.error || err.message), 'error');
         }
@@ -76,7 +86,7 @@ export default function GroupManager() {
     const handleDeleteGroup = async (groupName) => {
         if (!window.confirm(`Delete group "${groupName}" and unmap all its cameras?`)) return;
         try {
-            await axios.delete(`${API}/delete`, { data: { groupName } });
+            await axios.delete(`${API_ZONES}/${encodeURIComponent(groupName)}`);
             await fetchData();
             showNotification(`Deleted "${groupName}"`);
         } catch (err) {
@@ -124,9 +134,9 @@ export default function GroupManager() {
     const handleAssign = async () => {
         if (!actionGroupTarget || selectedCameraIds.size === 0 || hasMappingConflict) return;
         try {
-            await axios.post(`${API}/map`, {
-                cameraIds: Array.from(selectedCameraIds),
-                groupName: actionGroupTarget
+            await axios.post(API_ZONES_ASSIGN, {
+                camera_ids: Array.from(selectedCameraIds),
+                group_name: actionGroupTarget
             });
             showNotification(`Assigned ${selectedCameraIds.size} camera(s) → "${actionGroupTarget}"`);
             setSelectedCameraIds(new Set());
@@ -140,9 +150,9 @@ export default function GroupManager() {
     const handleUnmap = async () => {
         if (selectedCameraIds.size === 0) return;
         try {
-            await axios.post(`${API}/map`, {
-                cameraIds: Array.from(selectedCameraIds),
-                groupName: ''
+            await axios.post(API_ZONES_ASSIGN, {
+                camera_ids: Array.from(selectedCameraIds),
+                group_name: ''
             });
             showNotification(`Unmapped ${selectedCameraIds.size} camera(s)`);
             setSelectedCameraIds(new Set());

@@ -4,7 +4,7 @@ import { LayoutDashboard, ScrollText, Gavel, MonitorCheck, Network, Database, Se
 import logo from './assets/i2v-icon.svg';
 import Dashboard from './components/Dashboard';
 import BrokerManager from './components/BrokerManager';
-import Settings from './components/Settings'; // Renamed to "Database System" in UI
+import Settings from './components/Settings';
 import Logs from './components/Logs';
 import DataPeek from './components/DataPeek';
 import RuleEditor from './components/RuleEditor';
@@ -12,8 +12,9 @@ import DeviceManager from './components/DeviceManager';
 import Admin from './components/Admin';
 import SchemaMapper from './components/SchemaMapper';
 import CameraMapping from './components/CameraMapping';
-import AdminLayout from './components/AdminLayout'; // The new layout
-import SystemConfigWrapper from './components/SystemConfigWrapper'; // The new unified config UI
+import GroupManager from './components/GroupManager';
+import AdminLayout from './components/AdminLayout';
+import SystemConfigWrapper from './components/SystemConfigWrapper';
 
 function App() {
   const navigate = useNavigate();
@@ -92,11 +93,12 @@ function App() {
             {/* Secure Admin Routes */}
             <Route path="/admin" element={<AdminLayout />}>
               <Route index element={<Navigate to="/admin/sources" replace />} />
-              <Route path="sources" element={<SystemConfigWrapper initialTab="mqtt" />} />
-              <Route path="devices" element={<DeviceManager />} />
-              <Route path="cameras" element={<CameraMapping />} />
-              <Route path="schema" element={<SchemaMapper />} />
-              <Route path="config" element={<SystemConfigWrapper initialTab="pipeline" />} />
+              <Route path="sources"      element={<SystemConfigWrapper initialTab="mqtt" />} />
+              <Route path="devices"      element={<DeviceManager />} />
+              <Route path="cameras"      element={<CameraMapping />} />
+              <Route path="camera-zones" element={<GroupManager />} />
+              <Route path="schema"       element={<SchemaMapper />} />
+              <Route path="config"       element={<SystemConfigWrapper initialTab="pipeline" />} />
             </Route>
 
             {/* Fallback */}

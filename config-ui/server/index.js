@@ -239,25 +239,34 @@ app.patch('/api/env/tuning', (req, res) => {
 app.get('/api/cameras', async (req, res) => {
     try {
         const result = await dbPool.query(`
-            SELECT camera_id, camera_name, camera_ip as source_ip, latitude, longitude 
-            FROM camera_master 
-            ORDER BY camera_id ASC
+            SELECT
+                cm.camera_id,
+                cm.camera_name,
+                cm.camera_ip,
+                cm.camera_type,
+                cm.latitude,
+                cm.longitude,
+                cm.location,
+                cm.is_active,
+                cgm.group_name
+            FROM camera_master cm
+            LEFT JOIN camera_group_mapping cgm ON cm.camera_id = cgm.camera_id
+            ORDER BY cm.camera_name ASC
         `);
         res.json({ cameras: result.rows });
     } catch (e) {
-        logger.error("Failed to fetch cameras from DB", e);
-        res.status(500).json({ error: "Database error: " + e.message });
+        logger.error('Camera fetch error:', e.message);
+        res.status(500).json({ error: e.message, cameras: [] });
     }
 });
 
 app.post('/api/cameras/:id/geodata', async (req, res) => {
     const { id } = req.params;
-    const { latitude, longitude } = req.body;
-    
+    const { latitude, longitude, location } = req.body;
     try {
         await dbPool.query(
-            'UPDATE camera_master SET latitude = $1, longitude = $2 WHERE camera_id = $3',
-            [latitude, longitude, id]
+            'UPDATE camera_master SET latitude = $1, longitude = $2, location = $3, updated_at = NOW() WHERE camera_id = $4',
+            [latitude ?? null, longitude ?? null, location ?? null, id]
         );
         res.json({ success: true });
     } catch (e) {
@@ -265,6 +274,7 @@ app.post('/api/cameras/:id/geodata', async (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
+
 
 app.post('/api/cameras/bulk', async (req, res) => {
     const { updates } = req.body;
@@ -661,8 +671,195 @@ app.post('/api/devices', (req, res) => {
 });
 
 
+
+// ==========================================
+// 3b. REDIS HEALTH ENDPOINT
+// ==========================================
+app.get('/api/redis/health', async (req, res) => {
+    try {
+        // Read mode from .env
+        const shockMode = String(process.env.SHOCK_ABSORBER_MODE || 'false').toLowerCase() === 'true';
+        const mode = shockMode ? 'SHOCK_ABSORBER' : 'DIRECT_DB';
+
+        // Try to connect to Redis and query stream stats
+        const net = require('net');
+        const redisPort = parseInt(process.env.REDIS_PORT || '6379');
+        const redisHost = process.env.REDIS_HOST || '127.0.0.1';
+        const streamName = process.env.REDIS_STREAM_NAME || 'mqtt:ingest';
+
+        // Use raw TCP to send Redis commands (no redis npm package needed)
+        const getRedisInfo = () => new Promise((resolve, reject) => {
+            const client = net.createConnection(redisPort, redisHost);
+            let data = '';
+            const timeout = setTimeout(() => { client.destroy(); reject(new Error('timeout')); }, 2000);
+
+            client.on('connect', () => {
+                // Send XLEN to get stream length + INFO clients for worker count
+                client.write(`*2\r\n$4\r\nXLEN\r\n$${streamName.length}\r\n${streamName}\r\n`);
+            });
+            client.on('data', chunk => {
+                data += chunk.toString();
+                if (data.startsWith(':') || data.startsWith('-')) {
+                    clearTimeout(timeout);
+                    client.destroy();
+                    const streamLength = parseInt(data.slice(1)) || 0;
+                    resolve({ streamLength });
+                }
+            });
+            client.on('error', err => { clearTimeout(timeout); reject(err); });
+        });
+
+        const { streamLength } = await getRedisInfo();
+
+        // Get active camera count and throughput from DB
+        let workerCount = 0;
+        let eventsPerSec = null;
+        try {
+            // Active cameras = distinct camera_ids in last 30 seconds
+            const r = await dbPool.query(`
+                SELECT COUNT(DISTINCT camera_id) as workers
+                FROM mqtt_events
+                WHERE created_at >= NOW() - INTERVAL '30 seconds'
+            `);
+            workerCount = parseInt(r.rows[0]?.workers) || 0;
+
+            // Throughput = events in last 5 seconds / 5
+            const r2 = await dbPool.query(`
+                SELECT COUNT(*) as cnt
+                FROM mqtt_events
+                WHERE created_at >= NOW() - INTERVAL '5 seconds'
+            `);
+            eventsPerSec = Math.round((parseInt(r2.rows[0]?.cnt) || 0) / 5);
+        } catch (_) {}
+
+        res.json({
+            connected: true,
+            mode,
+            streamLength,
+            workerCount,
+            consumerLag: streamLength,  // In direct mode lag = backlog
+            eventsPerSec,
+        });
+    } catch (e) {
+        res.json({ connected: false, mode: 'UNKNOWN', streamLength: null, workerCount: 0, consumerLag: null, eventsPerSec: null });
+    }
+});
+
+// ==========================================
+// 3c. CAMERA GEODATA API
+// ==========================================
+app.get('/api/cameras', async (req, res) => {
+    try {
+        const result = await dbPool.query(`
+            SELECT
+                cm.camera_id,
+                cm.camera_name,
+                cm.camera_ip,
+                cm.camera_type,
+                cm.latitude,
+                cm.longitude,
+                cm.location,
+                cm.is_active,
+                cgm.group_name
+            FROM camera_master cm
+            LEFT JOIN camera_group_mapping cgm ON cm.camera_id = cgm.camera_id
+            ORDER BY cm.camera_name ASC
+        `);
+        res.json({ cameras: result.rows });
+    } catch (e) {
+        logger.error('Camera fetch error:', e.message);
+        res.status(500).json({ error: e.message, cameras: [] });
+    }
+});
+
+app.post('/api/cameras/:camera_id/geodata', async (req, res) => {
+    try {
+        const { camera_id } = req.params;
+        const { latitude, longitude, location } = req.body;
+        await dbPool.query(`
+            UPDATE camera_master
+            SET latitude = $1, longitude = $2, location = $3, updated_at = NOW()
+            WHERE camera_id = $4
+        `, [latitude, longitude, location, camera_id]);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// ==========================================
+// 3d. CAMERA ZONE GROUPS API
+// ==========================================
+app.get('/api/camera-zones', async (req, res) => {
+    try {
+        // Get all defined groups with camera counts
+        const groups = await dbPool.query(`
+            SELECT
+                cgm.group_name,
+                COUNT(cgm.camera_id)                              AS camera_count,
+                ARRAY_AGG(cm.camera_name ORDER BY cm.camera_name) AS cameras
+            FROM camera_group_mapping cgm
+            JOIN camera_master cm ON cm.camera_id = cgm.camera_id
+            GROUP BY cgm.group_name
+            ORDER BY cgm.group_name ASC
+        `);
+        // Cameras not yet in any group
+        const ungrouped = await dbPool.query(`
+            SELECT cm.camera_id, cm.camera_name, cm.camera_ip, cm.camera_type
+            FROM camera_master cm
+            LEFT JOIN camera_group_mapping cgm ON cm.camera_id = cgm.camera_id
+            WHERE cgm.camera_id IS NULL
+            ORDER BY cm.camera_name ASC
+        `);
+        res.json({ groups: groups.rows, ungrouped: ungrouped.rows });
+    } catch (e) {
+        res.status(500).json({ error: e.message, groups: [], ungrouped: [] });
+    }
+});
+
+app.post('/api/camera-zones/assign', async (req, res) => {
+    try {
+        const { camera_ids, group_name } = req.body;
+        if (!Array.isArray(camera_ids) || camera_ids.length === 0)
+            return res.status(400).json({ error: 'camera_ids required' });
+
+        if (!group_name) {
+            // Remove from group
+            await dbPool.query(
+                `DELETE FROM camera_group_mapping WHERE camera_id = ANY($1::text[])`,
+                [camera_ids]
+            );
+        } else {
+            // Upsert — assign to group
+            const values = camera_ids.map((id, i) => `($${i * 2 + 1}, $${i * 2 + 2})`).join(',');
+            const params = camera_ids.flatMap(id => [id, group_name]);
+            await dbPool.query(
+                `INSERT INTO camera_group_mapping (camera_id, group_name)
+                 VALUES ${values}
+                 ON CONFLICT (camera_id) DO UPDATE SET group_name = EXCLUDED.group_name`,
+                params
+            );
+        }
+        res.json({ success: true, updated: camera_ids.length });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Delete a whole group
+app.delete('/api/camera-zones/:group_name', async (req, res) => {
+    try {
+        const { group_name } = req.params;
+        await dbPool.query(`DELETE FROM camera_group_mapping WHERE group_name = $1`, [group_name]);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // ==========================================
 // 4. STATIC FRONTEND SERVING
+
 // ==========================================
 const CLIENT_BUILD = path.join(IS_PKG ? BASE_DIR : path.join(__dirname, '..'), 'client', 'dist');
 logger.info(`Serving Frontend from: ${CLIENT_BUILD}`);

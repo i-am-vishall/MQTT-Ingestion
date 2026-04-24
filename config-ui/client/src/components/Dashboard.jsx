@@ -1,15 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
-import { Play, Square, RotateCw, Activity, Server, Database, Layers } from 'lucide-react';
+import { Play, Square, RotateCw, Activity, Cpu, AlertTriangle, Users, Layers, ArrowRight } from 'lucide-react';
 
 const API_BASE = '/api';
 
 const SERVICE_LABELS = {
     'ingestion': 'MQTT Ingestion Service',
-    'db': 'PostgreSQL Database',
-    'telegraf': 'Telegraf Monitoring',
-    'influxdb': 'InfluxDB 3.0',
-    'redis': 'Redis Stream Buffer'
+    'db':        'PostgreSQL Database',
+    'redis':     'Redis Stream Buffer',
 };
 
 export default function Dashboard() {
@@ -103,22 +101,91 @@ export default function Dashboard() {
         </div>
     );
 
+    // Redis worker health
+    const [redisHealth, setRedisHealth] = useState(null);
+
+    const fetchRedisHealth = async () => {
+        try {
+            const res = await axios.get(`${API_BASE}/redis/health`);
+            setRedisHealth(res.data);
+        } catch { setRedisHealth(null); }
+    };
+
+    useEffect(() => {
+        fetchRedisHealth();
+        const p = setInterval(fetchRedisHealth, 5000);
+        return () => clearInterval(p);
+    }, []);
+
+    const metricBox = (label, value, sub, color = 'text-white') => (
+        <div className="bg-slate-900/60 rounded-lg p-4 border border-slate-700/50 flex flex-col gap-1">
+            <div className={`text-2xl font-bold font-mono ${color}`}>{value ?? '—'}</div>
+            <div className="text-xs font-semibold text-slate-300">{label}</div>
+            {sub && <div className="text-[10px] text-slate-500 mt-0.5">{sub}</div>}
+        </div>
+    );
+
+    const streamLen   = redisHealth?.streamLength  ?? null;
+    const workerCount = redisHealth?.workerCount   ?? null;
+    const lag         = redisHealth?.consumerLag   ?? null;
+    const mode        = redisHealth?.mode          ?? null;
+    const streamColor = streamLen > 500000 ? 'text-red-400' : streamLen > 100000 ? 'text-yellow-400' : 'text-green-400';
+    const lagColor    = lag > 10000 ? 'text-red-400' : lag > 1000 ? 'text-yellow-400' : 'text-green-400';
+
     return (
-        <div className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="bg-surface rounded-xl border border-slate-700 p-8 shadow-lg md:col-span-2">
-                    <h3 className="text-xl font-bold mb-6 flex items-center">
-                        <span className="w-2 h-8 bg-primary rounded-full mr-3"></span>
-                        Services Health & Control
+        <div className="space-y-6 p-6">
+            {/* Services Health */}
+            <div className="bg-surface rounded-xl border border-slate-700 p-6 shadow-lg">
+                <h3 className="text-lg font-bold mb-5 flex items-center">
+                    <span className="w-1.5 h-7 bg-primary rounded-full mr-3"></span>
+                    Services Health &amp; Control
+                </h3>
+                <div className="grid grid-cols-1 gap-3">
+                    <StatusRow id="ingestion" label={SERVICE_LABELS['ingestion']} status={statuses['ingestion']} />
+                    <StatusRow id="db"        label={SERVICE_LABELS['db']}        status={statuses['db']} />
+                    <StatusRow id="redis"     label={SERVICE_LABELS['redis']}     status={statuses['redis']} />
+                </div>
+            </div>
+
+            {/* Redis Workers Panel */}
+            <div className="bg-surface rounded-xl border border-slate-700 p-6 shadow-lg">
+                <div className="flex items-center justify-between mb-5">
+                    <h3 className="text-lg font-bold flex items-center">
+                        <span className="w-1.5 h-7 bg-purple-500 rounded-full mr-3"></span>
+                        Redis Ingestion Workers
                     </h3>
-                    <div className="grid grid-cols-1 gap-4">
-                        <StatusRow id="ingestion" label={SERVICE_LABELS['ingestion']} status={statuses['ingestion']} />
-                        <StatusRow id="db" label={SERVICE_LABELS['db']} status={statuses['db']} />
-                        <StatusRow id="redis" label={SERVICE_LABELS['redis']} status={statuses['redis']} />
-                        <StatusRow id="telegraf" label={SERVICE_LABELS['telegraf']} status={statuses['telegraf']} />
-                        <StatusRow id="influxdb" label={SERVICE_LABELS['influxdb']} status={statuses['influxdb']} />
+                    <div className="flex items-center gap-2">
+                        {mode && (
+                            <span className={`text-xs font-bold px-3 py-1 rounded-full border ${
+                                mode === 'SHOCK_ABSORBER'
+                                    ? 'bg-purple-900/30 text-purple-300 border-purple-800/50'
+                                    : 'bg-blue-900/30 text-blue-300 border-blue-800/50'
+                            }`}>
+                                {mode === 'SHOCK_ABSORBER' ? '⚡ Shock Absorber Mode' : '⟳ Direct DB Mode'}
+                            </span>
+                        )}
+                        {!redisHealth && (
+                            <span className="text-xs text-slate-500 flex items-center gap-1">
+                                <AlertTriangle size={12} /> Redis not connected
+                            </span>
+                        )}
                     </div>
                 </div>
+
+                {redisHealth ? (
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        {metricBox('Stream Backlog', streamLen?.toLocaleString(), 'Events queued in Redis stream', streamColor)}
+                        {metricBox('Active Workers', workerCount, 'Node.js writer processes', workerCount > 0 ? 'text-green-400' : 'text-red-400')}
+                        {metricBox('Consumer Lag', lag?.toLocaleString(), 'Events behind real-time', lagColor)}
+                        {metricBox('Throughput', redisHealth.eventsPerSec ? `${redisHealth.eventsPerSec}/s` : '—', 'Events processed per second', 'text-blue-300')}
+                    </div>
+                ) : (
+                    <div className="text-center py-10 text-slate-600">
+                        <Layers size={32} className="mx-auto mb-2 opacity-40" />
+                        <p className="text-sm">Redis health endpoint not reachable.<br />
+                        <span className="text-xs">Start Redis and the ingestion service to see worker stats.</span></p>
+                    </div>
+                )}
             </div>
         </div>
     );
