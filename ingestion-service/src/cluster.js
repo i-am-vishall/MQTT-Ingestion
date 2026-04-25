@@ -40,35 +40,36 @@ if (cluster.isPrimary) {
         cluster.fork();
     });
 
-    // Auto-Scaler Brain Loop - ONLY IF SHOCK ABSORBER MODE IS ON
-    if (config.service.shockAbsorberMode) {
-        const Redis = require('ioredis');
-        const redis = new Redis({
-            host: config.redis.host,
-            port: config.redis.port,
-            password: config.redis.password,
-            lazyConnect: true
-        });
+    // Always connect to Redis to report worker health, regardless of Shock Absorber mode
+    const Redis = require('ioredis');
+    const redis = new Redis({
+        host: config.redis.host,
+        port: config.redis.port,
+        password: config.redis.password,
+        lazyConnect: true
+    });
 
-        redis.connect().then(async () => {
-            // Apply memory limits from .env if present
-            if (process.env.REDIS_MAX_MEMORY) {
-                await redis.config('SET', 'maxmemory', process.env.REDIS_MAX_MEMORY)
-                           .catch(err => logger.warn('Failed to set redis maxmemory. Check if Redis allows CONFIG command.'));
-            }
-            if (process.env.REDIS_EVICTION_POLICY) {
-                await redis.config('SET', 'maxmemory-policy', process.env.REDIS_EVICTION_POLICY)
-                           .catch(err => logger.warn('Failed to set redis eviction policy.'));
-            }
+    redis.connect().then(async () => {
+        // Apply memory limits from .env if present
+        if (process.env.REDIS_MAX_MEMORY) {
+            await redis.config('SET', 'maxmemory', process.env.REDIS_MAX_MEMORY)
+                .catch(err => logger.warn('Failed to set redis maxmemory. Check if Redis allows CONFIG command.'));
+        }
+        if (process.env.REDIS_EVICTION_POLICY) {
+            await redis.config('SET', 'maxmemory-policy', process.env.REDIS_EVICTION_POLICY)
+                .catch(err => logger.warn('Failed to set redis eviction policy.'));
+        }
 
-            // Expose active worker count to UI dashboard immediately
-            redis.set('mqtt:active_cluster_workers', Object.keys(cluster.workers).length);
+        // Expose active worker count to UI dashboard immediately
+        redis.set('mqtt:active_cluster_workers', Object.keys(cluster.workers).length);
 
-            setInterval(async () => {
-                try {
-                    const activeWorkers = Object.keys(cluster.workers).length;
-                    redis.set('mqtt:active_cluster_workers', activeWorkers);
+        setInterval(async () => {
+            try {
+                const activeWorkers = Object.keys(cluster.workers).length;
+                redis.set('mqtt:active_cluster_workers', activeWorkers);
 
+                // Auto-Scaler Brain - ONLY IF SHOCK ABSORBER MODE IS ON
+                if (config.service.shockAbsorberMode) {
                     // Check pending messages (items grabbed by workers but not saved to db yet)
                     const pendingData = await redis.xpending(config.stream.name, config.stream.consumerGroup);
                     const pendingCount = pendingData ? pendingData[0] : 0;
@@ -77,17 +78,17 @@ if (cluster.isPrimary) {
                     // If the sum of pending messages is nearing the physical capacity of all active workers (80%),
                     // they are saturated. We need to spawn more support!
                     const capacity = activeWorkers * batchSize;
-                    
+
                     if (pendingCount >= capacity * 0.8 && activeWorkers < maxWorkers) {
                         logger.info(`HEAVY LOAD DETECTED: Pending (${pendingCount}) nearing Capacity (${capacity}). Autoscaling UP!`);
                         targetWorkers++;
                         cluster.fork();
-                    } 
+                    }
                     // If there is very little load (under 20% capacity) and we have excess workers burning RAM...
                     else if (pendingCount < capacity * 0.2 && activeWorkers > minWorkers) {
                         logger.debug(`LOW LOAD DETECTED: Pending (${pendingCount}) far below Capacity (${capacity}). Autoscaling DOWN!`);
                         targetWorkers--;
-                        
+
                         // Find any active worker and gracefully disconnect them
                         const workerIds = Object.keys(cluster.workers);
                         if (workerIds.length > 0) {
@@ -96,15 +97,16 @@ if (cluster.isPrimary) {
                             victim.disconnect(); // Graceful kill
                         }
                     }
-
-                } catch (err) {
-                    logger.error({ err: err.message }, 'Auto-scaler encountered an error connecting to Redis or analyzing streams.');
                 }
-            }, 5000); // Check load every 5 seconds
-        }).catch(err => {
-            logger.error('Failed to connect primary cluster to Redis for auto-scaling.', err);
-        });
-    } else {
+            } catch (err) {
+                logger.error({ err: err.message }, 'Health reporter encountered an error connecting to Redis.');
+            }
+        }, 5000); // Check load every 5 seconds
+    }).catch(err => {
+        logger.error('Failed to connect primary cluster to Redis for health reporting.', err);
+    });
+
+    if (!config.service.shockAbsorberMode) {
         logger.info('SHOCK ABSORBER MODE IS OFF: Redis elastic scaling disabled, running statically.');
     }
 

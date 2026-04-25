@@ -141,7 +141,7 @@ async function verifyDB() {
         startDatabaseWatchdog();
 
     } catch (err) {
-        logger.fatal(err, 'STEP 3/6 [FAILED]: Could not connect to Database');
+        logger.error(err, 'STEP 3/6 [FAILED]: Could not connect to Database');
         process.exit(1);
     }
 }
@@ -1243,7 +1243,7 @@ const shutdown = async (signal) => {
 
     setTimeout(() => {
         console.error('Force shutting down after timeout');
-        logger.fatal('Force shutting down after timeout');
+        logger.error('Force shutting down after timeout');
         process.exit(1);
     }, 5000);
 
@@ -1265,7 +1265,7 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 
 process.on('uncaughtException', (err) => {
     console.error('CRITICAL: Uncaught Exception!', err);
-    logger.fatal(err, 'CRITICAL: Uncaught Exception! Service is configured to ignore crash and continue running.');
+    logger.error(err, 'CRITICAL: Uncaught Exception! Service is configured to ignore crash and continue running.');
     // process.exit(1); // Disabled to prevent crash loops
 });
 

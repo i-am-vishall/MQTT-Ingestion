@@ -694,34 +694,46 @@ app.get('/api/redis/health', async (req, res) => {
             const timeout = setTimeout(() => { client.destroy(); reject(new Error('timeout')); }, 2000);
 
             client.on('connect', () => {
-                // Send XLEN to get stream length + INFO clients for worker count
+                // Command 1: XLEN (Get stream length)
                 client.write(`*2\r\n$4\r\nXLEN\r\n$${streamName.length}\r\n${streamName}\r\n`);
+                // Command 2: GET (Get worker count)
+                const key = 'mqtt:active_cluster_workers';
+                client.write(`*2\r\n$3\r\nGET\r\n$${key.length}\r\n${key}\r\n`);
             });
+
+            let results = [];
             client.on('data', chunk => {
                 data += chunk.toString();
-                if (data.startsWith(':') || data.startsWith('-')) {
+                // Simple RESP parsing for our specific commands
+                const lines = data.split('\r\n');
+                if (lines.length >= 3) { // Expecting at least :len\r\n and $len\r\nVal\r\n
                     clearTimeout(timeout);
                     client.destroy();
-                    const streamLength = parseInt(data.slice(1)) || 0;
-                    resolve({ streamLength });
+                    
+                    const streamLength = parseInt(lines[0].slice(1)) || 0;
+                    let workerCount = 0;
+                    if (lines[1].startsWith('$')) {
+                        workerCount = parseInt(lines[2]) || 0;
+                    }
+                    resolve({ streamLength, workerCount });
                 }
             });
             client.on('error', err => { clearTimeout(timeout); reject(err); });
         });
 
-        const { streamLength } = await getRedisInfo();
+        const { streamLength, workerCount } = await getRedisInfo();
 
         // Get active camera count and throughput from DB
-        let workerCount = 0;
+        let activeCameras = 0;
         let eventsPerSec = null;
         try {
             // Active cameras = distinct camera_ids in last 30 seconds
             const r = await dbPool.query(`
-                SELECT COUNT(DISTINCT camera_id) as workers
+                SELECT COUNT(DISTINCT camera_id) as cameras
                 FROM mqtt_events
                 WHERE created_at >= NOW() - INTERVAL '30 seconds'
             `);
-            workerCount = parseInt(r.rows[0]?.workers) || 0;
+            activeCameras = parseInt(r.rows[0]?.cameras) || 0;
 
             // Throughput = events in last 5 seconds / 5
             const r2 = await dbPool.query(`
@@ -737,53 +749,12 @@ app.get('/api/redis/health', async (req, res) => {
             mode,
             streamLength,
             workerCount,
-            consumerLag: streamLength,  // In direct mode lag = backlog
+            activeCameras,
+            consumerLag: streamLength,
             eventsPerSec,
         });
     } catch (e) {
         res.json({ connected: false, mode: 'UNKNOWN', streamLength: null, workerCount: 0, consumerLag: null, eventsPerSec: null });
-    }
-});
-
-// ==========================================
-// 3c. CAMERA GEODATA API
-// ==========================================
-app.get('/api/cameras', async (req, res) => {
-    try {
-        const result = await dbPool.query(`
-            SELECT
-                cm.camera_id,
-                cm.camera_name,
-                cm.camera_ip,
-                cm.camera_type,
-                cm.latitude,
-                cm.longitude,
-                cm.location,
-                cm.is_active,
-                cgm.group_name
-            FROM camera_master cm
-            LEFT JOIN camera_group_mapping cgm ON cm.camera_id = cgm.camera_id
-            ORDER BY cm.camera_name ASC
-        `);
-        res.json({ cameras: result.rows });
-    } catch (e) {
-        logger.error('Camera fetch error:', e.message);
-        res.status(500).json({ error: e.message, cameras: [] });
-    }
-});
-
-app.post('/api/cameras/:camera_id/geodata', async (req, res) => {
-    try {
-        const { camera_id } = req.params;
-        const { latitude, longitude, location } = req.body;
-        await dbPool.query(`
-            UPDATE camera_master
-            SET latitude = $1, longitude = $2, location = $3, updated_at = NOW()
-            WHERE camera_id = $4
-        `, [latitude, longitude, location, camera_id]);
-        res.json({ success: true });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
     }
 });
 
@@ -851,6 +822,19 @@ app.delete('/api/camera-zones/:group_name', async (req, res) => {
     try {
         const { group_name } = req.params;
         await dbPool.query(`DELETE FROM camera_group_mapping WHERE group_name = $1`, [group_name]);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Rename a group
+app.patch('/api/camera-zones/:group_name', async (req, res) => {
+    try {
+        const { group_name } = req.params;
+        const { new_name } = req.body;
+        if (!new_name) return res.status(400).json({ error: 'new_name required' });
+        await dbPool.query(`UPDATE camera_group_mapping SET group_name = $1 WHERE group_name = $2`, [new_name, group_name]);
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: e.message });
