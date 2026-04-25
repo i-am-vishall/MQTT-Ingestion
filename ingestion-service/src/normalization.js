@@ -210,7 +210,6 @@ function normalizeEvent(topic, payload) {
             device_ip: extractDeviceIp(payload),
             camera_name: payload.DeviceName || payload.cameraName || 'UNKNOWN'
         };
-}
     }
 
     // Default / Pass-through for non-ANPR (Security, etc.)

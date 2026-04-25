@@ -59,9 +59,21 @@ module.exports = {
         idleTimeoutMillis: 30000,
     },
     service: {
-        batchSize: parseInt(process.env.BATCH_SIZE || '100'),
-        batchTimeoutMs: parseInt(process.env.BATCH_TIMEOUT || '1000'),
+        batchSize: parseInt(process.env.BATCH_SIZE || '2000'),
+        batchTimeoutMs: parseInt(process.env.BATCH_TIMEOUT || '3000'),
         sourcePrefix: process.env.SOURCE_PREFIX || 'Source_Server',
+        minWorkers: parseInt(process.env.MIN_NODE_WORKERS || '2'),
+        maxWorkers: parseInt(process.env.MAX_NODE_WORKERS || '12'),
+        shockAbsorberMode: ['true', '1', 'on'].includes(String(process.env.SHOCK_ABSORBER_MODE || 'true').toLowerCase()),
+    },
+    redis: {
+        host: process.env.REDIS_HOST || '127.0.0.1',
+        port: parseInt(process.env.REDIS_PORT || '6379'),
+        password: process.env.REDIS_PASSWORD || '',
+    },
+    stream: {
+        name: process.env.REDIS_STREAM_NAME || 'mqtt:ingest',
+        consumerGroup: process.env.REDIS_CONSUMER_GROUP || 'workers',
     },
     // Logging configuration
     debugMode:
