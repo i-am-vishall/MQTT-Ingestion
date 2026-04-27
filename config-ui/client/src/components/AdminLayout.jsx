@@ -183,7 +183,7 @@ const AdminLayout = () => {
             )}
 
             {/* Content Area */}
-            <div className="flex-1 overflow-hidden relative">
+            <div className="flex-1 h-full overflow-hidden relative">
                 <Outlet context={{ isLocked }} />
             </div>
         </div>

@@ -99,13 +99,38 @@ app.post('/api/config', (req, res) => {
         // Save Brokers
         if (brokers) fs.writeFileSync(BROKERS_FILE, JSON.stringify(brokers, null, 2));
 
-        // Update .env
-        let envContent = fs.existsSync(ENV_FILE) ? fs.readFileSync(ENV_FILE, 'utf-8') : '';
-        let envConfig = parseEnv(envContent);
+        // Safe .env update function to preserve comments and layout
+        function updateEnvSafely(filePath, updates) {
+            if (!fs.existsSync(filePath)) return;
+            const content = fs.readFileSync(filePath, 'utf-8');
+            const lines = content.split('\n');
+            const updatedKeys = new Set();
+            
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (!line || line.startsWith('#')) continue;
+                const eqIdx = line.indexOf('=');
+                if (eqIdx === -1) continue;
+                const key = line.substring(0, eqIdx).trim();
+                if (updates[key] !== undefined) {
+                    lines[i] = `${key}=${updates[key]}`;
+                    updatedKeys.add(key);
+                }
+            }
+            
+            // Append new keys
+            for (const [k, v] of Object.entries(updates)) {
+                if (!updatedKeys.has(k)) {
+                    lines.push(`${k}=${v}`);
+                }
+            }
+            fs.writeFileSync(filePath, lines.join('\n'));
+        }
 
+        const updates = {};
         if (brokers) {
-            envConfig['MQTT_BROKER_URL'] = brokers.map(b => b.url).join(',');
-            envConfig['MQTT_BROKER_ID'] = brokers.map(b => {
+            updates['MQTT_BROKER_URL'] = brokers.map(b => b.url).join(',');
+            updates['MQTT_BROKER_ID'] = brokers.map(b => {
                 try {
                     const urlObj = new URL(b.url.includes('://') ? b.url : 'mqtt://' + b.url);
                     const ip = urlObj.hostname.replace(/\./g, '_');
@@ -116,21 +141,19 @@ app.post('/api/config', (req, res) => {
             }).join(',');
         }
         if (db) {
-            if (db.host) envConfig['DB_HOST'] = db.host;
-            if (db.port) envConfig['DB_PORT'] = db.port;
-            if (db.user) envConfig['DB_USER'] = db.user;
-            if (db.pass) envConfig['DB_PASSWORD'] = db.pass;
-            if (db.name) envConfig['DB_NAME'] = db.name;
-            if (db.logLevel) envConfig['LOG_LEVEL'] = db.logLevel;
+            if (db.host) updates['DB_HOST'] = db.host;
+            if (db.port) updates['DB_PORT'] = db.port;
+            if (db.user) updates['DB_USER'] = db.user;
+            if (db.pass) updates['DB_PASSWORD'] = db.pass;
+            if (db.name) updates['DB_NAME'] = db.name;
+            if (db.logLevel) updates['LOG_LEVEL'] = db.logLevel;
         }
 
-        const newContent = Object.entries(envConfig).map(([k, v]) => `${k}=${v}`).join('\n');
-        fs.writeFileSync(ENV_FILE, newContent);
+        updateEnvSafely(ENV_FILE, updates);
 
-        // Auto-Restart Ingestion Service
+        // Auto-Restart Ingestion Service using reliable PowerShell Restart-Service
         if (brokers) {
-            // Added timeout to prevent hanging
-            exec('net stop "i2v-MQTT-Ingestion-Service" && net start "i2v-MQTT-Ingestion-Service"', { timeout: 30000 }, (err) => {
+            exec('powershell -Command "Restart-Service -Name i2v-MQTT-Ingestion-Service -Force"', { timeout: 30000 }, (err) => {
                 if (err) logger.error("Failed to auto-restart ingestion service:", err);
                 else logger.info("Ingestion Service Restarted via Config Update");
             });
@@ -152,7 +175,8 @@ const TUNABLE_KEYS = [
     'MQTT_BROKER_URL', 'MQTT_TOPICS', 'MQTT_BROKER_ID', 'MQTT_PORT',
     'DB_USER', 'DB_HOST', 'DB_NAME', 'DB_PASSWORD', 'DB_PORT',
     'BATCH_SIZE', 'MAX_CONCURRENT_WRITERS', 'BATCH_TIMEOUT',
-    'REDIS_STREAM_MAXLEN', 'MIN_NODE_WORKERS', 'MAX_NODE_WORKERS',
+    'REDIS_STREAM_MAXLEN', 'REDIS_MAX_MEMORY', 'REDIS_EVICTION_POLICY',
+    'SHOCK_ABSORBER_MODE', 'MIN_NODE_WORKERS', 'MAX_NODE_WORKERS',
     'LOG_LEVEL', 'DEBUG_MODE', 'DEBUG_MODE_INGESTION', 'DEBUG_MODE_CONFIG', 'HEALTH_PORT', 'PORT', 'ADMIN_USER', 'ADMIN_PASS'
 ];
 
@@ -181,10 +205,35 @@ app.get('/api/env/tuning', (req, res) => {
 
 app.patch('/api/env/tuning', (req, res) => {
     try {
-        const { updates, brokers, restart } = req.body;
-        
-        let content = fs.existsSync(ENV_FILE) ? fs.readFileSync(ENV_FILE, 'utf-8') : '';
-        let envConfig = parseEnv(content);
+        // Safe .env update function to preserve comments and layout
+        function updateEnvSafely(filePath, envUpdates) {
+            if (!fs.existsSync(filePath)) return;
+            const content = fs.readFileSync(filePath, 'utf-8');
+            const lines = content.split('\n');
+            const updatedKeys = new Set();
+            
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (!line || line.startsWith('#')) continue;
+                const eqIdx = line.indexOf('=');
+                if (eqIdx === -1) continue;
+                const key = line.substring(0, eqIdx).trim();
+                if (envUpdates[key] !== undefined) {
+                    lines[i] = `${key}=${envUpdates[key]}`;
+                    updatedKeys.add(key);
+                }
+            }
+            
+            // Append new keys
+            for (const [k, v] of Object.entries(envUpdates)) {
+                if (!updatedKeys.has(k)) {
+                    lines.push(`${k}=${v}`);
+                }
+            }
+            fs.writeFileSync(filePath, lines.join('\n'));
+        }
+
+        const updatesToApply = {};
 
         // 1. Handle regular env updates
         if (updates && typeof updates === 'object') {
@@ -192,7 +241,7 @@ app.patch('/api/env/tuning', (req, res) => {
             if (rejected.length > 0) {
                 return res.status(400).json({ error: `Keys not allowed: ${rejected.join(', ')}` });
             }
-            Object.entries(updates).forEach(([k, v]) => { envConfig[k] = String(v); });
+            Object.entries(updates).forEach(([k, v]) => { updatesToApply[k] = String(v); });
         }
 
         // 2. Handle Brokers Metadata and Sync
@@ -200,8 +249,8 @@ app.patch('/api/env/tuning', (req, res) => {
             fs.writeFileSync(BROKERS_FILE, JSON.stringify(brokers, null, 2));
             
             // Sync .env with broker details
-            envConfig['MQTT_BROKER_URL'] = brokers.map(b => b.url).join(',');
-            envConfig['MQTT_BROKER_ID'] = brokers.map(b => {
+            updatesToApply['MQTT_BROKER_URL'] = brokers.map(b => b.url).join(',');
+            updatesToApply['MQTT_BROKER_ID'] = brokers.map(b => {
                 try {
                     const urlObj = new URL(b.url.includes('://') ? b.url : 'mqtt://' + b.url);
                     const ip = urlObj.hostname.replace(/\./g, '_');
@@ -212,13 +261,12 @@ app.patch('/api/env/tuning', (req, res) => {
             }).join(',');
         }
 
-        const newContent = Object.entries(envConfig).map(([k, v]) => `${k}=${v}`).join('\n');
-        fs.writeFileSync(ENV_FILE, newContent);
+        updateEnvSafely(ENV_FILE, updatesToApply);
 
         logger.info({ updates, brokers: !!brokers }, 'Ingestion tuning updated via UI');
 
         if (restart || brokers) {
-            exec('net stop "i2v-MQTT-Ingestion-Service" && net start "i2v-MQTT-Ingestion-Service"',
+            exec('powershell -Command "Restart-Service -Name i2v-MQTT-Ingestion-Service -Force"',
                 { timeout: 30000 }, (err) => {
                     if (err) logger.error('Auto-restart failed:', err.message);
                     else logger.info('Ingestion service restarted after tuning update');
@@ -373,38 +421,36 @@ app.get('/api/services', (req, res) => {
     };
 
     keys.forEach(key => {
-        exec(`sc.exe query "${SERVICES[key]}"`, (err, stdout) => {
-            let state = 'NOT INSTALLED';
-            const isNotInstalled = err && (err.message.includes('1060') || err.message.includes('does not exist'));
-
+        // Use PowerShell's Get-Service for more reliable status on Windows
+        const cmd = `powershell -Command "Get-Service -Name ${SERVICES[key]} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Status"`;
+        exec(cmd, (err, stdout) => {
+            let state = 'UNKNOWN';
+            
             if (!err && stdout) {
-                if (stdout.includes('RUNNING')) {
-                    state = 'RUNNING';
-                } else if (stdout.includes('STOPPED') || stdout.includes('STOP_PENDING')) {
-                    state = 'STOPPED';
-                } else if (stdout.includes('START_PENDING')) {
-                    state = 'RUNNING';
-                } else if (stdout.includes('PAUSED')) {
-                    state = 'STOPPED';
-                }
+                const status = stdout.trim();
+                if (status === '4' || status === 'Running') state = 'RUNNING';
+                else if (status === '1' || status === 'Stopped') state = 'STOPPED';
+                else if (status === '2' || status === 'StartPending') state = 'RUNNING';
+                else if (status === '3' || status === 'StopPending') state = 'STOPPED';
                 finish(key, state);
-            } else if (isNotInstalled) {
+            } else {
+                // Fallback to process check if service not found or query failed
                 const proc = PROCESS_MAP[key];
                 if (proc) {
                     let searchName = proc.split('.')[0];
                     if (key === 'influxdb') searchName = 'influx';
 
-                    exec(`tasklist /FI "IMAGENAME eq ${searchName}*"`, (e2, out2) => {
-                        if (!e2 && out2 && out2.toLowerCase().includes(searchName.toLowerCase()) && !out2.includes('No tasks')) {
+                    exec(`tasklist /FI "IMAGENAME eq ${searchName}*" /NH`, (e2, out2) => {
+                        if (!e2 && out2 && out2.toLowerCase().includes(searchName.toLowerCase())) {
                             state = 'RUNNING (Console)';
+                        } else {
+                            state = 'STOPPED';
                         }
                         finish(key, state);
                     });
                 } else {
-                    finish(key, state);
+                    finish(key, 'NOT INSTALLED');
                 }
-            } else {
-                finish(key, 'UNKNOWN');
             }
         });
     });
@@ -418,17 +464,31 @@ app.post('/api/service/start', (req, res) => {
         return res.status(400).json({ error: `Unknown service key: ${service}` });
     }
 
-    // "net start" is synchronous-ish (waits for success)
+    // Try "net start" first, fallback to "nssm start" if it exists
     exec(`net start "${serviceName}"`, (err, stdout, stderr) => {
         if (err) {
             // Error code 2182: Already requested / running
             if (err.message.includes('2182') || (stdout && stdout.includes('already started'))) {
                 return res.json({ success: true, message: 'Service was already running.' });
             }
-            logger.error(`Failed to start ${serviceName}`, err);
-            return res.status(500).json({ error: decodeError(err) });
+            
+            // Try NSSM fallback
+            const nssmPath = path.join(BASE_DIR, 'monitoring', 'nssm.exe');
+            if (fs.existsSync(nssmPath)) {
+                exec(`"${nssmPath}" start "${serviceName}"`, (e2) => {
+                    if (e2) {
+                        logger.error(`Failed to start ${serviceName} via both net and nssm`, e2);
+                        return res.status(500).json({ error: `Start failed: ${decodeError(err)}` });
+                    }
+                    res.json({ success: true, message: `Started ${serviceName} via NSSM` });
+                });
+            } else {
+                logger.error(`Failed to start ${serviceName}`, err);
+                return res.status(500).json({ error: decodeError(err) });
+            }
+        } else {
+            res.json({ success: true, message: `Started ${serviceName}` });
         }
-        res.json({ success: true, message: `Started ${serviceName}` });
     });
 });
 
@@ -520,22 +580,7 @@ app.get('/api/logs', (req, res) => {
     if (service === 'config-backend') folderName = 'config';
 
     try {
-        // A. Config Service: Serve from Memory if available
-        // Note: 'createLogger' logic puts logs in winston memory transport.
-        // We can expose a getter on the logger instance if we want, 
-        // OR just stick to disk for simplicity/uniformity.
-        // Given 'createLogger' exports the Winston instance, we need to inspect transports.
-        // User asked for "API reads memory first". 
-        // The logger attached to THIS process is 'logger'. 
-        // So we can read 'logger' memory transport.
-
-        if (service === 'config' || service === 'config-backend') {
-            // Try to read from memory transport
-            const transport = logger.transports.find(t => t.name === 'memory');
-            // If we had exposed a getter... 
-            // But since we didn't explicitly attach a .getLogs() to the logger instance in this file...
-            // Let's stick to the robust disk reader which is 100% reliable.
-        }
+        // Logs are stored on disk by winston. We read the latest file.
 
         const logFile = getLatestLogFile(folderName);
 

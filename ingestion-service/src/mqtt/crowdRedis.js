@@ -44,7 +44,7 @@ async function pushCrowdToRedis(redisClient, payload) {
     const props      = payload.properties || {};
     const count      = parseInt(props.count ?? payload.count ?? 0);
     // Note: Ignoring payload's zoneId to strictly rely on our DB UI mapping
-    const payloadZoneId = props.zoneId || payload.zoneId || '';
+    const zoneId = props.zoneId || payload.zoneId || '';
     const threshold  = parseInt(props.threshold ?? 0);
     const ts         = payload.alertTime || new Date().toISOString();
 

@@ -67,7 +67,7 @@ module.exports = {
         minWorkers: parseInt(process.env.MIN_NODE_WORKERS || '2'),
         maxWorkers: parseInt(process.env.MAX_NODE_WORKERS || '12'),
         retentionDays: parseInt(process.env.DB_RETENTION_DAYS || '90'),
-        shockAbsorberMode: ['true', '1', 'on'].includes(String(process.env.SHOCK_ABSORBER_MODE || 'true').toLowerCase()),
+        shockAbsorberMode: ['true', '1', 'on'].includes(String(process.env.SHOCK_ABSORBER_MODE || 'false').toLowerCase()),
     },
     redis: {
         host: process.env.REDIS_HOST || '127.0.0.1',

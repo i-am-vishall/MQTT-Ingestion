@@ -19,6 +19,8 @@ const KEY_META = {
     MIN_NODE_WORKERS: { tab: 'pipeline', label: 'Min Node Workers', desc: 'Minimum Node.js ingestion processes to keep alive.', min: 1, max: 8, step: 1, type: 'range', unit: 'workers' },
     MAX_NODE_WORKERS: { tab: 'pipeline', label: 'Max Node Workers', desc: 'Maximum processes spawned during backlog surges.', min: 4, max: 24, step: 1, type: 'range', unit: 'workers' },
     REDIS_STREAM_MAXLEN: { tab: 'pipeline', label: 'Redis Retention Count', desc: 'Max events retained in Redis stream before dropping oldest.', type: 'number' },
+    REDIS_MAX_MEMORY: { tab: 'pipeline', label: 'Redis Max Memory', desc: 'Max RAM allowed for Redis. e.g. 2gb, 512mb.', type: 'text' },
+    REDIS_EVICTION_POLICY: { tab: 'pipeline', label: 'Redis Eviction Policy', desc: 'Strategy for dropping data when max memory is hit.', type: 'select', options: ['allkeys-lru', 'volatile-lru', 'noeviction', 'allkeys-random'] },
     SHOCK_ABSORBER_MODE: { tab: 'pipeline', label: 'Shock Absorber Mode', desc: 'If enabled, buffers events via Redis Stream. If disabled, writes directly to DB.', type: 'toggle' },
 
     // Database
@@ -39,6 +41,7 @@ const KEY_META = {
     HEALTH_PORT: { tab: 'system', label: 'Health API Port', desc: 'Worker metrics & health endpoint port.', type: 'number' },
     ADMIN_USER: { tab: 'system', label: 'Admin Username', desc: 'Login username for this portal.', type: 'text' },
     ADMIN_PASS: { tab: 'system', label: 'Admin Password', desc: 'Login password for this portal.', type: 'password' },
+    MQTT_BROKER_ID: { tab: 'mqtt', label: 'Generated Broker IDs', desc: 'Read-only: Automatically generated from source name and IP.', type: 'readonly' },
     LOG_LEVEL: { tab: 'system', label: 'Log Level', desc: 'Global logging verbosity.', type: 'select', options: ['error', 'warn', 'info', 'debug'] },
     DEBUG_MODE: { tab: 'system', label: 'Global Debug', desc: 'Enables system-wide tracing.', type: 'toggle' },
     DEBUG_MODE_INGESTION: { tab: 'system', label: 'Ingestion Debug', desc: 'Verbose logs from data workers.', type: 'toggle' },
@@ -433,10 +436,20 @@ export default function SystemConfigWrapper({ initialTab = 'pipeline' }) {
         if (meta.type === 'text' || meta.type === 'number' || meta.type === 'password') return <TextField key={key} {...props} />;
         if (meta.type === 'select') return <SelectField key={key} {...props} />;
         if (meta.type === 'toggle') return <ToggleField key={key} {...props} />;
+        if (meta.type === 'readonly') return (
+            <div key={key}>
+                <label className="flex items-center text-sm font-semibold text-slate-200 mb-2">
+                    {meta.label}<Tooltip text={meta.desc} />
+                </label>
+                <div className="w-full bg-slate-900 border border-slate-800 text-slate-500 text-xs font-mono rounded-lg px-3 py-2.5 break-all">
+                    {values[key] || 'Auto-generated on save'}
+                </div>
+            </div>
+        );
         return null;
     };
 
-    const tabKeys = (tabId) => Object.keys(KEY_META).filter(k => KEY_META[k].tab === tabId && values[k] !== undefined);
+    const tabKeys = (tabId) => Object.keys(KEY_META).filter(k => KEY_META[k].tab === tabId);
 
     if (loading) {
         return (
@@ -450,7 +463,7 @@ export default function SystemConfigWrapper({ initialTab = 'pipeline' }) {
     const activeTabMeta = TABS.find(t => t.id === activeTab);
 
     return (
-        <div className="flex flex-col gap-4 min-h-0 flex-1">
+        <div className="flex flex-col gap-4 h-full p-4 md:p-6 overflow-hidden">
             {/* ── Header ── */}
             <div className="flex flex-wrap gap-3 items-center justify-between bg-slate-800/60 border border-slate-700/50 rounded-xl px-5 py-4 shrink-0">
                 <div>
@@ -561,16 +574,14 @@ export default function SystemConfigWrapper({ initialTab = 'pipeline' }) {
                                     ))}
                                 </div>
                             </div>
-                            {values.DB_RETENTION_DAYS !== undefined && (
-                                <div className="bg-slate-800/40 border border-slate-700/50 rounded-xl p-6">
-                                    <h3 className="text-sm font-bold text-slate-200 mb-4 flex items-center gap-2">
-                                        <Database size={16} className="text-blue-400" /> Storage Rules
-                                    </h3>
-                                    <div className={`relative p-1 rounded-lg ${String(values.DB_RETENTION_DAYS) !== String(original.DB_RETENTION_DAYS) ? 'after:absolute after:-left-3 after:top-1/2 after:-translate-y-1/2 after:w-1 after:h-full after:max-h-8 after:bg-amber-500 after:rounded-full' : ''}`}>
-                                       {renderField('DB_RETENTION_DAYS')}
-                                    </div>
+                            <div className="bg-slate-800/40 border border-slate-700/50 rounded-xl p-6">
+                                <h3 className="text-sm font-bold text-slate-200 mb-4 flex items-center gap-2">
+                                    <Database size={16} className="text-blue-400" /> Storage Rules
+                                </h3>
+                                <div className={`relative p-1 rounded-lg ${String(values.DB_RETENTION_DAYS) !== String(original.DB_RETENTION_DAYS) ? 'after:absolute after:-left-3 after:top-1/2 after:-translate-y-1/2 after:w-1 after:h-full after:max-h-8 after:bg-amber-500 after:rounded-full' : ''}`}>
+                                    {renderField('DB_RETENTION_DAYS')}
                                 </div>
-                            )}
+                            </div>
                         </div>
                     ) : (
                         /* System: text/select fields then separate debug toggles section */

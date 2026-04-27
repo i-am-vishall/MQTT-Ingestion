@@ -236,6 +236,75 @@ verifyDB();
 // MQTT Client
 const clients = [];
 
+// ==========================================
+// RESILIENCE ARCHITECTURE
+// ==========================================
+const loadMonitor = {
+    eps: 0,
+    dbLatency: 0,
+    isCircuitBroken: false,
+    lastEpsReset: Date.now(),
+    messageInCurrentWindow: 0,
+    dynamicDebounceMs: 5000
+};
+
+setInterval(() => {
+    const now = Date.now();
+    const duration = (now - loadMonitor.lastEpsReset) / 1000;
+    loadMonitor.eps = Math.floor(loadMonitor.messageInCurrentWindow / (duration || 1));
+    loadMonitor.messageInCurrentWindow = 0;
+    loadMonitor.lastEpsReset = now;
+    if (loadMonitor.eps > 1000) {
+        loadMonitor.dynamicDebounceMs = 15000;
+    } else {
+        loadMonitor.dynamicDebounceMs = 5000;
+    }
+}, 1000);
+
+let redisPipelineClient = null;
+if (config.service.shockAbsorberMode) {
+    const Redis = require('ioredis');
+    redisPipelineClient = new Redis(config.redis);
+    
+    redisPipelineClient.on('connect', () => {
+        logger.info('Redis connected. Starting Consumer loop.');
+        startRedisConsumer();
+    });
+    
+    redisPipelineClient.on('error', (err) => {
+        logger.error({ err: err.message }, 'Redis connection error.');
+    });
+}
+
+async function startRedisConsumer() {
+    let running = true;
+    try {
+        await redisPipelineClient.xgroup('CREATE', 'mqtt:ingest', 'workers', '0', 'MKSTREAM');
+    } catch(e) { /* Group likely exists */ }
+
+    while(running) {
+        try {
+            const res = await redisPipelineClient.xreadgroup('GROUP', 'workers', `worker_${process.pid}`, 'COUNT', config.service.batchSize || 2000, 'BLOCK', 200, 'STREAMS', 'mqtt:ingest', '>');
+            if (res && res[0] && res[0][1].length > 0) {
+                const messages = res[0][1];
+                for (const msg of messages) {
+                    try {
+                        const eventData = JSON.parse(msg[1][1]);
+                        addToBatch(eventData);
+                    } catch(e) {
+                        logger.error('Failed to parse message from Redis');
+                    }
+                }
+                const ids = messages.map(m => m[0]);
+                await redisPipelineClient.xack('mqtt:ingest', 'workers', ...ids);
+            }
+        } catch(e) {
+            logger.error({ err: e.message }, 'Consumer loop error');
+            await new Promise(r => setTimeout(r, 1000));
+        }
+    }
+}
+
 function handleMessage(topic, message, sourceId, sourceIp) {
     try {
         const payloadStr = message.toString();
@@ -291,6 +360,25 @@ function handleMessage(topic, message, sourceId, sourceIp) {
             event_type: normalizedEvent.event_type,
             severity: payload.severity || payload.level || 'info'
         };
+
+        loadMonitor.messageInCurrentWindow++;
+
+        // ── SHOCK ABSORBER (REDIS) MODE ──
+        if (config.service.shockAbsorberMode && redisPipelineClient && redisPipelineClient.status === 'ready') {
+            // Push to Redis Buffer (Producer)
+            redisPipelineClient.xadd('mqtt:ingest', 'MAXLEN', '~', 1000000, '*', 'data', JSON.stringify(eventData)).catch(e => {
+                logger.error('REDIS DOWN: Falling back to direct mode');
+                if (!loadMonitor.isCircuitBroken) addToBatch(eventData);
+            });
+            messageCounter++;
+            return;
+        }
+
+        // ── DIRECT DB MODE (NO REDIS) ──
+        if (loadMonitor.isCircuitBroken) {
+            // Protect Database during high latency
+            return;
+        }
 
         addToBatch(eventData);
         // INCREMENT BATCH COUNTER
@@ -523,6 +611,7 @@ async function flushBatch() {
                 const batch = messageBuffer;
                 messageBuffer = [];
 
+                const startLatencyTimer = Date.now();
                 const client = await pool.connect();
                 try {
                     await client.query('BEGIN');
@@ -631,6 +720,19 @@ async function flushBatch() {
                     }
 
                     await client.query('COMMIT');
+
+                    // CIRCUIT BREAKER / ADAPTIVE LOAD MONITOR
+                    loadMonitor.dbLatency = Date.now() - startLatencyTimer;
+                    if (loadMonitor.dbLatency > 2000 && !loadMonitor.isCircuitBroken) {
+                        logger.error({ latency: loadMonitor.dbLatency }, 'CRITICAL: DB Latency high! Tripping Circuit Breaker.');
+                        loadMonitor.isCircuitBroken = true;
+                        // Auto-reset after 30s
+                        setTimeout(() => { 
+                            loadMonitor.isCircuitBroken = false; 
+                            logger.info('Circuit Breaker Reset: Resuming processing.');
+                        }, 30000);
+                    }
+
                     totalIngested += batch.length;
                     // NO SUCCESS LOG ON BATCH - PERFORMANCE
                     // logger.info({ count: batch.length, total: totalIngested }, `Inserted batch of ${batch.length}`);
@@ -1237,63 +1339,52 @@ healthServer.listen(HEALTH_PORT, '127.0.0.1', () => {
 logger.info('Starting Normal Service Flow...');
 alignAndStartScheduler();
 
-// Graceful Shutdown
-const shutdown = async (signal) => {
-    logger.info(`${signal} signal received: closing resources`);
-
-    setTimeout(() => {
-        console.error('Force shutting down after timeout');
-        logger.error('Force shutting down after timeout');
-        process.exit(1);
-    }, 5000);
-
-    try {
-        if (healthServer) healthServer.close();
-        await flushBatch();
-        await pool.end();
-        clients.forEach(c => c.end());
-        logger.info('Graceful shutdown complete');
-        process.exit(0);
-    } catch (e) {
-        logger.error(e, 'Error during shutdown');
-        process.exit(1);
-    }
-};
-
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
-
-process.on('uncaughtException', (err) => {
-    console.error('CRITICAL: Uncaught Exception!', err);
-    logger.error(err, 'CRITICAL: Uncaught Exception! Service is configured to ignore crash and continue running.');
-    // process.exit(1); // Disabled to prevent crash loops
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('CRITICAL: Unhandled Rejection!', reason);
-    logger.error({ err: reason, promise }, 'CRITICAL: Unhandled Rejection');
-});
 // ============================================================
-// GRACEFUL SHUTDOWN
+// GRACEFUL SHUTDOWN — SINGLE HANDLER (prevents duplicate hang)
+// Hard kill after 4s if graceful cleanup stalls.
 // ============================================================
+let _shuttingDown = false;
+
 async function gracefulShutdown(signal) {
+    if (_shuttingDown) return; // Prevent double-invocation
+    _shuttingDown = true;
+
     logger.info(`Shutdown signal received (${signal}). Closing connections...`);
-    
-    // 1. Stop MQTT
-    clients.forEach(c => c.end(true));
-    
-    // 2. Drain DB Pool
+
+    // Hard-kill timer: if graceful cleanup takes > 4s, force exit
+    const hardKill = setTimeout(() => {
+        logger.error('Graceful shutdown timed out after 4s — forcing exit.');
+        process.exit(1);
+    }, 4000);
+    hardKill.unref(); // Don't let this timer keep the process alive on its own
+
     try {
-        await pool.end();
-        logger.info('Database pool drained.');
+        // 1. Stop accepting new MQTT messages
+        clients.forEach(c => { try { c.end(true); } catch (_) {} });
+
+        // 2. Drain DB Pool with a per-operation timeout guard
+        await Promise.race([
+            pool.end(),
+            new Promise(resolve => setTimeout(resolve, 2500)) // Max 2.5s for pool.end()
+        ]);
+
+        logger.info('Shutdown complete.');
     } catch (e) {
-        logger.error({ err: e.message }, 'Error draining DB pool');
+        logger.error({ err: e.message }, 'Error during shutdown cleanup');
     }
 
-    logger.info('Service shutdown complete.');
+    clearTimeout(hardKill);
     process.exit(0);
 }
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
 process.on('message', (msg) => { if (msg === 'shutdown') gracefulShutdown('NSSM_SHUTDOWN'); });
+
+process.on('uncaughtException', (err) => {
+    logger.error(err, 'CRITICAL: Uncaught Exception — continuing.');
+});
+
+process.on('unhandledRejection', (reason) => {
+    logger.error({ err: reason }, 'CRITICAL: Unhandled Rejection');
+});

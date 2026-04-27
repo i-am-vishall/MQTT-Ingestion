@@ -7,6 +7,8 @@ const { normalizeEvent } = require('../normalization');
 const { sanitizeObject } = require('./helpers');
 const { pushCrowdToRedis } = require('../mqtt/crowdRedis');
 
+const { processLiveStateDirect } = require('./liveState');
+
 let circuitBreaker = null;
 let dlq = null;
 let tieredBuffer = null;
@@ -14,6 +16,36 @@ let localBatch = null;
 let doMicroFlush = null;
 let scheduleMicroFlush = null;
 let redisClient = null;
+
+// Adaptive Load Monitor State
+const loadMonitor = {
+    eps: 0,
+    dbLatency: 0,
+    isCircuitBroken: false,
+    lastEpsReset: Date.now(),
+    messageInCurrentWindow: 0,
+    dynamicDebounceMs: 5000 // Starts at 5s
+};
+
+// Update EPS every second
+setInterval(() => {
+    const now = Date.now();
+    const duration = (now - loadMonitor.lastEpsReset) / 1000;
+    loadMonitor.eps = Math.floor(loadMonitor.messageInCurrentWindow / (duration || 1));
+    loadMonitor.messageInCurrentWindow = 0;
+    loadMonitor.lastEpsReset = now;
+
+    // ADAPTIVE LOGIC: Increase debounce if EPS is high (> 1000)
+    if (loadMonitor.eps > 1000) {
+        loadMonitor.dynamicDebounceMs = 15000; // 15s during high load
+    } else {
+        loadMonitor.dynamicDebounceMs = 5000;  // Back to 5s
+    }
+}, 1000);
+
+// New fallback tracks
+let localAnprBatch = [];
+let anprFlushTimer = null;
 
 let messageCounter = 0;
 
@@ -27,6 +59,44 @@ function initHandleMessage(deps) {
     redisClient = deps.redisClient;
 }
 
+/**
+ * Enhanced Flush with Latency Tracking
+ */
+async function flushAnprFallback() {
+    if (localAnprBatch.length === 0) return;
+    
+    const batch = localAnprBatch;
+    localAnprBatch = [];
+    if (anprFlushTimer) clearTimeout(anprFlushTimer);
+    anprFlushTimer = null;
+
+    const start = Date.now();
+    try {
+        if (doMicroFlush) {
+            localBatch.push(...batch);
+            await doMicroFlush();
+            
+            // Track Latency
+            loadMonitor.dbLatency = Date.now() - start;
+
+            // CIRCUIT BREAKER: Trip if DB is too slow (> 2000ms)
+            if (loadMonitor.dbLatency > 2000) {
+                if (!loadMonitor.isCircuitBroken) {
+                    logger.error({ latency: loadMonitor.dbLatency }, 'CRITICAL: DB Latency high! Tripping Circuit Breaker.');
+                    loadMonitor.isCircuitBroken = true;
+                    // Auto-reset after 30s
+                    setTimeout(() => { 
+                        loadMonitor.isCircuitBroken = false; 
+                        logger.info('Circuit Breaker Reset: Resuming Direct Bypass attempt.');
+                    }, 30000);
+                }
+            }
+        }
+    } catch (err) {
+        logger.error({ err: err.message }, 'ANPR Fallback flush failed');
+    }
+}
+
 function getMessageCountAndReset() {
     const val = messageCounter;
     messageCounter = 0;
@@ -34,6 +104,7 @@ function getMessageCountAndReset() {
 }
 
 async function handleMessage(topic, message, sourceId, sourceIp) {
+    loadMonitor.messageInCurrentWindow++;
     try {
         const payloadStr = message.toString();
         
@@ -56,28 +127,18 @@ async function handleMessage(topic, message, sourceId, sourceIp) {
             if (sourceId) payload._source_id = sourceId;
             if (sourceIp) payload._source_ip = sourceIp;
 
-            // Fix #10: sanitizeObject now module-scope — no closure alloc per message
             sanitizeObject(payload);
 
             const normalizedEvent = normalizeEvent(topic, payload);
+            const isTransactional = ['ANPR', 'Face_Recognition', 'Security'].includes(normalizedEvent.event_type);
 
             // ── SHOCK ABSORBER (REDIS) MODE ──────────────────────────────
             if (config.service.shockAbsorberMode) {
-                // ── REAL-TIME REDIS WRITE (fire-and-forget, zero DB load) ──────────────
-                pushCrowdToRedis(redisClient, payload).catch(() => {}); // never blocks, never throws
-
-                // CIRCUIT BREAKER / BACKPRESSURE CHECK
-                if (!circuitBreaker.shouldAccept({ event_type: normalizedEvent.event_type })) {
-                    if (dlq) {
-                        dlq.write({ topic, payload, event_time: normalizedEvent.event_time,
-                            camera_id: normalizedEvent.camera_id, event_type: normalizedEvent.event_type,
-                            severity: payload.severity || 'info' }, 'CIRCUIT_BREAKER_SHED');
-                    }
-                    continue;
-                }
+                
+                pushCrowdToRedis(redisClient, payload).catch(() => {});
 
                 const eventData = {
-                    _id: crypto.randomUUID(), // Correlation ID
+                    _id: crypto.randomUUID(),
                     topic,
                     payload,
                     normalized: normalizedEvent,
@@ -87,11 +148,26 @@ async function handleMessage(topic, message, sourceId, sourceIp) {
                     severity: payload.severity || payload.level || 'info'
                 };
 
-                // Push to 3-tier buffer
-                if (tieredBuffer) {
-                    await tieredBuffer.push(eventData);
-                }
+                const tier = await tieredBuffer.push(eventData);
                 messageCounter++;
+
+                // 3. FALLBACK LOGIC: If Redis is down (Tier 2/3), trigger the Bypass
+                // BUT ONLY if Circuit Breaker is NOT tripped
+                if (tier !== 'REDIS' && !loadMonitor.isCircuitBroken) {
+                    if (isTransactional) {
+                        localAnprBatch.push(eventData);
+                        if (localAnprBatch.length >= 50) {
+                            flushAnprFallback();
+                        } else if (!anprFlushTimer) {
+                            anprFlushTimer = setTimeout(flushAnprFallback, 2000);
+                        }
+                    } else {
+                        // Use Dynamic Debounce based on EPS
+                        processLiveStateDirect(eventData, loadMonitor.dynamicDebounceMs).catch((err) => {
+                            logger.error({ err: err.message, camera_id: eventData.camera_id }, 'Live Bypass Failed');
+                        });
+                    }
+                }
                 
             } else {
                 // ── DIRECT DB MODE (NO REDIS) ──────────────────────────────
