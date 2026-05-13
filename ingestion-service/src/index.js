@@ -140,6 +140,9 @@ async function verifyDB() {
         // Start Self-Healing Watchdog
         startDatabaseWatchdog();
 
+        // Start Data Retention (Cleanup) Job
+        startDatabaseRetentionJob();
+
     } catch (err) {
         logger.error(err, 'STEP 3/6 [FAILED]: Could not connect to Database');
         process.exit(1);
@@ -209,6 +212,69 @@ function startDatabaseWatchdog() {
     }, WATCHDOG_INTERVAL_MS);
     
     logger.info('STEP 3.2/6: Database Self-Healing Watchdog STARTED.');
+}
+
+/**
+ * DB RETENTION: Periodic Cleanup of old data
+ */
+function startDatabaseRetentionJob() {
+    const RETENTION_DAYS = config.service.retentionDays || 30;
+    const CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000; // Once per day
+    
+    const runCleanup = async () => {
+        let client;
+        try {
+            logger.info(`Retention Job: Starting cleanup of data older than ${RETENTION_DAYS} day(s)...`);
+            client = await pool.connect();
+            
+            const tables = [
+                { name: 'mqtt_events', timeCol: 'event_time' },
+                { name: 'anpr_event_fact', timeCol: 'event_time' },
+                { name: 'frs_event_fact', timeCol: 'event_time' },
+                { name: 'atcc_event_fact', timeCol: 'event_time' },
+                { name: 'vehicle_occupancy_fact', timeCol: 'event_time' },
+                { name: 'vids_event_fact', timeCol: 'event_time' },
+                { name: 'camera_metrics_1min', timeCol: 'bucket_time' },
+                { name: 'anpr_metrics_1min', timeCol: 'bucket_time' },
+                { name: 'anpr_violation_metrics_1min', timeCol: 'bucket_time' },
+                { name: 'frs_metrics_1min', timeCol: 'bucket_time' }
+            ];
+
+            for (const table of tables) {
+                try {
+                    const res = await client.query(`
+                        DELETE FROM ${table.name} 
+                        WHERE ${table.timeCol} < NOW() - INTERVAL '${RETENTION_DAYS} days'
+                    `);
+                    if (res.rowCount > 0) {
+                        logger.info(`Retention Job: Purged ${res.rowCount} rows from ${table.name}`);
+                    }
+                } catch (tableErr) {
+                    // Table might not exist or col might be different, log and continue
+                    if (tableErr.code === '42P01') {
+                        // Table does not exist - skip silently or debug log
+                        logger.debug(`Retention Job: Table ${table.name} does not exist, skipping.`);
+                    } else {
+                        logger.warn({ err: tableErr.message, table: table.name }, 'Retention Job: Failed to clean table');
+                    }
+                }
+            }
+            
+            logger.info('Retention Job: Cleanup cycle completed successfully.');
+        } catch (err) {
+            logger.error({ err: err.message }, 'Retention Job: Critical error during cleanup cycle');
+        } finally {
+            if (client) client.release();
+        }
+    };
+
+    // Run immediately on start
+    runCleanup();
+    
+    // Then schedule
+    setInterval(runCleanup, CLEANUP_INTERVAL_MS);
+    
+    logger.info(`STEP 3.3/6: Database Retention (${RETENTION_DAYS} days) Job STARTED.`);
 }
 
 async function loadRules() {
